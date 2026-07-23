@@ -1,0 +1,77 @@
+{
+  "name": "indusagi-coding-agent",
+  "version": "0.2.5",
+  "description": "Indusagi coding agent — a terminal-first AI coding agent, built from scratch on the indusagi framework.",
+  "author": "Varun Israni",
+  "license": "AGPL-3.0",
+  "keywords": [
+    "ai",
+    "llm",
+    "agent",
+    "coding-agent",
+    "tui",
+    "cli"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/varunisrani/induscode-ts.git"
+  },
+  "homepage": "https://www.npmjs.com/package/indusagi-coding-agent",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/types/index.d.ts",
+  "bin": {
+    "indus": "dist/entry.js",
+    "indusagi": "dist/entry.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/types/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./guardrails": {
+      "types": "./dist/types/guardrails.d.ts",
+      "import": "./dist/guardrails.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "CHANGELOG.md",
+    "CREDITS.md",
+    "NOTICE",
+    "README.md"
+  ],
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "build": "node build.mjs",
+    "lineage-scan": "node scripts/lineage-scan.mjs",
+    "test": "vitest --run",
+    "test:watch": "vitest",
+    "start": "node dist/entry.js",
+    "start:help": "node dist/entry.js --help"
+  },
+  "dependencies": {
+    "@sinclair/typebox": "^0.34.49",
+    "chalk": "^5.6.2",
+    "highlight.js": "^11.11.1",
+    "indusagi": "^0.13.8",
+    "ink": "^5.2.1",
+    "jiti": "^2.7.0",
+    "marked": "^18.0.4",
+    "react": "^18.3.1",
+    "strip-ansi": "^7.2.0",
+    "ulid": "^3.0.2",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "@types/react": "^18.3.12",
+    "esbuild": "^0.28.0",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}
