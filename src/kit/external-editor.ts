@@ -1,37 +1,48 @@
-// @ts-nocheck
-// Type declarations recovered from dist/types (no runtime body)
 /**
  * External-editor kit — hand the composer buffer off to the user's `$EDITOR`,
  * wait for them to close it, and read the edited text back.
- *
- * Composing a long prompt at a single-line terminal caret is painful; this
- * helper stages the current buffer in a temp file, launches the configured
- * editor against it with the terminal shared (so vi/nano/etc. take over the
- * screen), blocks until the editor exits, then reads the file back as the new
- * buffer.
- *
- * The editor is resolved from `$VISUAL`, then `$EDITOR`, then a `vi` fallback —
- * the conventional precedence. The spawn is synchronous and inherits stdio so
- * the editor owns the real terminal; on return the temp file is removed. Any
- * failure (no editor that runs, a non-zero exit, an unreadable file) yields
- * `null` and the caller keeps the original buffer.
- *
- * Only `child_process` / `fs` / `os` builtins are used; nothing here depends on
- * the framework or a sibling subsystem.
  */
-/** Options for {@link openInExternalEditor} — injectable so tests stay hermetic. */
+import { spawnSync } from "node:child_process";
+import { readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+const FALLBACK_EDITOR = "vi";
+
 export interface ExternalEditorOptions {
-    /** Override the environment consulted for `$VISUAL` / `$EDITOR`. */
-    readonly env?: NodeJS.ProcessEnv;
-    /** Override the temp directory the scratch file is written to. */
-    readonly dir?: string;
+  readonly env?: NodeJS.ProcessEnv;
+  readonly dir?: string;
 }
-/**
- * Stage `buffer` in a temp file, open it in the user's editor sharing this
- * terminal, block until the editor exits, and return the edited text — or
- * `null` when the editor could not run or exited non-zero.
- *
- * A single trailing newline (most editors add one on save) is stripped so the
- * round-trip does not silently grow the buffer. The temp file is always removed.
- */
-export declare function openInExternalEditor(buffer: string, options?: ExternalEditorOptions): string | null;
+
+function resolveEditor(env: NodeJS.ProcessEnv): string[] {
+  const configured = env.VISUAL || env.EDITOR || FALLBACK_EDITOR;
+  const parts = configured.split(/\s+/).filter((part) => part.length > 0);
+  return parts.length > 0 ? parts : [FALLBACK_EDITOR];
+}
+
+export function openInExternalEditor(
+  buffer: string,
+  options: ExternalEditorOptions = {},
+): string | null {
+  const env = options.env ?? process.env;
+  const dir = options.dir ?? tmpdir();
+  const name = `indus-editor-${Date.now().toString(36)}-${Math.random()
+    .toString(36)
+    .slice(2, 8)}.md`;
+  const path = join(dir, name);
+  const [editor, ...editorArgs] = resolveEditor(env);
+  try {
+    writeFileSync(path, buffer, "utf8");
+    const result = spawnSync(editor, [...editorArgs, path], { stdio: "inherit" });
+    if (result.error || result.status !== 0) return null;
+    return readFileSync(path, "utf8").replace(/\n$/, "");
+  } catch {
+    return null;
+  } finally {
+    try {
+      unlinkSync(path);
+    } catch {
+      /* ignore cleanup errors */
+    }
+  }
+}

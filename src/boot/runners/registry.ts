@@ -1,5 +1,3 @@
-// @ts-nocheck
-// Type declarations recovered from dist/types (no runtime body)
 /**
  * Runner registry — the table-driven replacement for a mode `if/else` ladder.
  *
@@ -14,14 +12,19 @@
  * if no runner claims an invocation, {@link selectRunner} returns it, so a bare
  * command line lands in the interactive session.
  */
-import type { Invocation, Runner } from "../contract";
+import type { Invocation, Runner } from "../contract.js";
+import { replRunner } from "./repl-runner.js";
+import { oneshotRunner } from "./oneshot-runner.js";
+import { linkRunner } from "./link-runner.js";
+
 /**
  * Every runner the boot layer can dispatch to, in match-priority order.
  *
  * {@link selectRunner} scans this list front-to-back and returns the first
  * accepting runner; `replRunner` leads the list and also serves as the default.
  */
-export declare const RUNNERS: readonly Runner[];
+export const RUNNERS: readonly Runner[] = [replRunner, oneshotRunner, linkRunner];
+
 /**
  * Choose the runner for a parsed {@link Invocation}.
  *
@@ -29,4 +32,11 @@ export declare const RUNNERS: readonly Runner[];
  * the invocation; if none does, falls back to the interactive REPL runner so
  * dispatch is total and a runner is always returned.
  */
-export declare function selectRunner(inv: Invocation): Runner;
+export function selectRunner(inv: Invocation): Runner {
+  for (const runner of RUNNERS) {
+    if (runner.accepts(inv)) {
+      return runner;
+    }
+  }
+  return replRunner;
+}

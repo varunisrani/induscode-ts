@@ -1,5 +1,3 @@
-// @ts-nocheck
-// Type declarations recovered from dist/types (no runtime body)
 /**
  * Boot helper: decide whether a provider runs in **server mode** (Case B).
  *
@@ -20,27 +18,59 @@
  * `(ctx, provider, vault)` triple so the key-resolver fallback and the
  * gateway-base-url computation always agree on whether server mode is active.
  */
-import type { BootContext } from "../contract";
-import type { AuthVault } from "../../launch/contract";
+import { INDUS_SERVER_URL, getServerToken, hasValidServerToken } from "../server-token.js";
+import type { AuthVault } from "../../launch/contract.js";
+import type { BootContext } from "../contract.js";
+
 /**
  * The outcome of {@link resolveServerMode}: whether the provider should route
  * through the gateway this run, and (when so) the session token to hand back as
  * the provider api key.
  */
 export interface ServerModeResult {
-    /** `true` => bind the gateway base url and use {@link token} as the key. */
-    serverMode: boolean;
-    /** The session token (`access_token`) to vend as the key, when `serverMode`. */
-    token?: string;
+  /** `true` => bind the gateway base url and use {@link token} as the key. */
+  serverMode: boolean;
+  /** The session token (`access_token`) to vend as the key, when `serverMode`. */
+  token?: string;
 }
+
+const GATEWAY_ELIGIBLE_PROVIDERS: ReadonlySet<string> = new Set([
+  "minimax",
+  "sarvam",
+]);
+
 /**
  * Whether `provider` may be routed through the indus gateway. Excludes the
  * non-portable providers (vertex / bedrock / codex) and the deferred opencode
  * `anthropic-messages` api per the §B.4 caveat.
  */
-export declare function isGatewayEligibleProvider(provider: string): boolean;
+export function isGatewayEligibleProvider(provider: string): boolean {
+  return GATEWAY_ELIGIBLE_PROVIDERS.has(provider);
+}
+
 /** The server-tier provider slugs (for default-model selection / listing). */
-export declare function serverTierProviders(): readonly string[];
+export function serverTierProviders(): readonly string[] {
+  return [...GATEWAY_ELIGIBLE_PROVIDERS];
+}
+
+async function hasUsableLocalKey(provider: string, vault: AuthVault): Promise<boolean> {
+  try {
+    const accounts: string[] = [];
+    const def = await vault.defaultAccount(provider);
+    if (def !== undefined && def.length > 0) accounts.push(def);
+    for (const account of await vault.listAccounts(provider)) {
+      if (!accounts.includes(account)) accounts.push(account);
+    }
+    for (const account of accounts) {
+      const key = await vault.readUsableKey(provider, account);
+      if (typeof key === "string" && key.length > 0) return true;
+    }
+  } catch {
+    // ignore
+  }
+  return false;
+}
+
 /**
  * Decide whether `provider` runs in server mode for this session.
  *
@@ -60,7 +90,16 @@ export declare function serverTierProviders(): readonly string[];
  * @param provider the framework provider slug to evaluate
  * @param vault the on-disk credential vault to probe for a local key
  */
-export declare function resolveServerMode(_ctx: BootContext, provider: string, vault: AuthVault): Promise<ServerModeResult>;
+export async function resolveServerMode(_ctx: BootContext, provider: string, vault: AuthVault): Promise<ServerModeResult> {
+  if (!isGatewayEligibleProvider(provider)) return { serverMode: false };
+  if (await hasUsableLocalKey(provider, vault)) return { serverMode: false };
+  if (!(await hasValidServerToken())) return { serverMode: false };
+  const token = await getServerToken();
+  const access = token?.access_token;
+  if (typeof access !== "string" || access.length === 0) return { serverMode: false };
+  return { serverMode: true, token: access };
+}
+
 /**
  * Build the per-provider gateway base-url map for THIS session: for every
  * gateway-eligible provider currently in server mode (no explicit local key +
@@ -70,4 +109,13 @@ export declare function resolveServerMode(_ctx: BootContext, provider: string, v
  * `/model` switch — so selecting ANY server-tier model (not just the one the
  * session launched on) routes through the gateway. Empty when nothing qualifies.
  */
-export declare function resolveServerGatewayUrls(ctx: BootContext, vault: AuthVault): Promise<Record<string, string>>;
+export async function resolveServerGatewayUrls(ctx: BootContext, vault: AuthVault): Promise<Record<string, string>> {
+  const map: Record<string, string> = {};
+  for (const provider of GATEWAY_ELIGIBLE_PROVIDERS) {
+    const result = await resolveServerMode(ctx, provider, vault);
+    if (result.serverMode) {
+      map[provider] = `${INDUS_SERVER_URL}/gateway/${provider}`;
+    }
+  }
+  return map;
+}

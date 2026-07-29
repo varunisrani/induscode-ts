@@ -1,190 +1,205 @@
-// @ts-nocheck
-// Type declarations recovered from dist/types (no runtime body)
-/**
- * TranscriptStore — the conductor's persistent, branchable transcript.
- *
- * Replaces pi's `SessionManager`, but with the conductor's own vocabulary and a
- * deliberately different internal model. The transcript is an append-only **tree**
- * of {@link TranscriptEntry} nodes: every node names its `parent`, a single
- * {@link SessionHead} tracks the active `leaf`, and the active conversation is the
- * `parent`-chain walked from that leaf back to a root.
- *
- * Design stance (an independent persistence model):
- *   - **Reducer-friendly.** The on-disk form is a flat NDJSON log; the in-memory
- *     view is rebuilt by a pure {@link replay} reducer over that log. State is a
- *     value derived from the log, never mutated in place behind the scenes.
- *   - **Fresh envelope.** Lines carry the `indus/transcript@1` schema with our own
- *     field names (`prev`, `at`, `kind`), delegated to {@link module:serialize} —
- *     not any framework-internal session-manager schema.
- *   - **Branch = move the head.** {@link branchAt} repoints the leaf at an earlier
- *     node; the next {@link append} becomes that node's child, forking a new path
- *     without rewriting history.
- *   - **`pathTo` is the read primitive.** {@link pathTo} resolves the root→leaf
- *     branch (the message list the agent replays); the conductor's `resume` calls
- *     it to rehydrate.
- *
- * The store is storage-pluggable: a {@link TranscriptBackend} abstracts where bytes
- * live, so tests inject an in-memory backend and the conductor binds a filesystem
- * one. Construction is synchronous and empty; {@link load} hydrates from a backend.
- */
-import type { AgentMessage, SessionHead, TranscriptEntry, TranscriptRole } from "../contract";
-import { TRANSCRIPT_SCHEMA } from "../contract";
+import { ulid } from "ulid";
+import type { AgentMessage } from "indusagi/agent";
 import type { Usage } from "indusagi/ai";
-/**
- * Where a transcript's NDJSON log lives. The store appends lines and, on branch,
- * rewrites the whole file; a backend supplies those three primitives plus a way
- * to resolve a session id to its location. All methods may be async.
- *
- * The default {@link fsBackend} maps a session id to `<dir>/<sessionId>.ndjson`;
- * tests pass an in-memory backend so no disk is touched.
- */
+import { TRANSCRIPT_SCHEMA } from "../contract.js";
+import type { SessionHead, TranscriptEntry, TranscriptRole } from "../contract.js";
+import { encodeEntry, encodeHead, parseSessionText, roleForMessage } from "./serialize.js";
+
 export interface TranscriptBackend {
-    /** Absolute location (path/key) a session id persists to. */
-    locate(sessionId: string): string;
-    /** Read the full NDJSON text for a session, or `null` if absent. */
-    read(sessionId: string): Promise<string | null>;
-    /** Append one already-encoded NDJSON line (no trailing newline) to a session. */
-    append(sessionId: string, line: string): Promise<void>;
-    /** Replace the whole NDJSON text for a session (used after a branch). */
-    rewrite(sessionId: string, text: string): Promise<void>;
+  locate(sessionId: string): string;
+  read(sessionId: string): Promise<string | null>;
+  append(sessionId: string, line: string): Promise<void>;
+  rewrite(sessionId: string, text: string): Promise<void>;
 }
-/** An in-memory backend — the default when no persistence is wired. */
-export declare function memoryBackend(): TranscriptBackend;
-/**
- * A filesystem backend rooted at `dir`. Lazily imports `node:fs`/`node:path` so
- * the module stays usable in non-Node test contexts that pass {@link memoryBackend}.
- */
-export declare function fsBackend(dir: string): TranscriptBackend;
-/**
- * The immutable derived state of a transcript: the node table keyed by id, plus
- * the current head. A pure value produced by {@link replay}; the store holds one
- * and swaps it wholesale on each mutation rather than mutating fields.
- */
+
 export interface TranscriptState {
-    /** Every node, keyed by id, in insertion order. */
-    readonly nodes: ReadonlyMap<string, TranscriptEntry>;
-    /** The active head (session id + current leaf). */
-    readonly head: SessionHead;
+  readonly nodes: ReadonlyMap<string, TranscriptEntry>;
+  readonly head: SessionHead;
 }
-/** A clock + id seam so tests get deterministic ids/timestamps. */
+
 export interface TranscriptClock {
-    /** Mint a fresh, sortable node id. */
-    readonly id: () => string;
-    /** The current instant as an ISO-8601 string. */
-    readonly now: () => string;
+  readonly id: () => string;
+  readonly now: () => string;
 }
-/**
- * Rebuild a {@link TranscriptState} from an ordered entry list and a leaf.
- *
- * Pure and total: the same inputs always yield the same state. The reducer just
- * indexes the entries by id (later ids overwrite earlier — append-only logs never
- * collide, but a rewrite stays idempotent) and pins the head. Replacing pi's
- * mutate-in-place index with an explicit reducer is the divergence.
- */
-export declare function replay(sessionId: string, entries: readonly TranscriptEntry[], leaf: string | null): TranscriptState;
-/** Tuning seams for a {@link TranscriptStore}. All optional. */
+
 export interface TranscriptStoreOptions {
-    /** Where bytes live; defaults to {@link memoryBackend}. */
-    readonly backend?: TranscriptBackend;
-    /** Id/timestamp source; defaults to ULID + wall clock. */
-    readonly clock?: TranscriptClock;
+  readonly backend?: TranscriptBackend;
+  readonly clock?: TranscriptClock;
 }
-/**
- * An append-only, branchable transcript bound to one session id.
- *
- * Construct (empty), then either {@link append} fresh nodes or {@link load} a
- * persisted session. Every mutation appends to the backend and swaps the derived
- * {@link TranscriptState}. Reads (`pathTo`, `messages`, `head`) are O(branch
- * depth) walks over the in-memory node table.
- */
-export declare class TranscriptStore {
-    #private;
-    constructor(sessionId: string, options?: TranscriptStoreOptions);
-    /** The session id this store is bound to. */
-    get sessionId(): string;
-    /** The current head (session id + active leaf). */
-    get head(): SessionHead;
-    /**
-     * The cumulative session usage last persisted onto the head, or `undefined`
-     * when none has been written (a fresh session, or a legacy file without a
-     * usage-bearing head). `resume` reads this to restore the running token/cost
-     * total instead of seeding zero.
-     */
-    get usage(): Usage | undefined;
-    /** Number of nodes currently in the transcript. */
-    get size(): number;
-    /** Backend location this session persists to (for diagnostics/UI). */
-    locate(sessionId?: string): string;
-    /** Look up a single node by id. */
-    get(id: string): TranscriptEntry | undefined;
-    /**
-     * Append a framework {@link AgentMessage} as a child of the current leaf and
-     * advance the head onto it. The node role is derived from the message (or
-     * overridden via `role`). Persists the new line, then returns the new node.
-     *
-     * This is the conductor's per-message write: one call per produced message in
-     * a settled turn.
-     */
-    append(content: AgentMessage, role?: TranscriptRole, meta?: Readonly<Record<string, unknown>>): Promise<TranscriptEntry>;
-    /**
-     * Persist the session's cumulative usage onto the head and rewrite the backing
-     * file so the running token/cost total survives a reload. Distinct from
-     * {@link append}, which only appends an entry line and never rewrites the head:
-     * usage durability MUST flow through here so the re-emitted head line carries
-     * the latest tally. Leaves the node tree and active leaf untouched.
-     *
-     * @param usage the cumulative usage to pin on the head
-     */
-    persistUsage(usage: Usage): Promise<void>;
-    /**
-     * Repoint the head at an earlier node, forking a branch. The next {@link append}
-     * becomes a child of `id`; existing nodes are untouched. Rewrites the head line.
-     *
-     * @throws if `id` is not a known node.
-     */
-    branchAt(id: string): Promise<void>;
-    /**
-     * Reset the head to before any node; the next {@link append} starts a new root.
-     * Used when re-editing the very first turn.
-     */
-    reset(): Promise<void>;
-    /**
-     * Abandon the current conversation and begin a fresh, empty session under a new
-     * id. All nodes are dropped and the leaf is reset to null, so {@link messages}
-     * is empty and the next {@link append} starts a new root; subsequent writes
-     * persist to the new session's backing file (the old one is left intact on
-     * disk). This is the `/clear` (new-session) primitive — distinct from
-     * {@link reset}, which keeps the nodes and id and only rewinds the head.
-     */
-    startNewSession(sessionId: string): void;
-    /**
-     * Resolve the active branch: the root→leaf node list reached by walking
-     * `parent` links up from `leaf` (or from `from` when given), reversed to
-     * chronological order.
-     *
-     * This is the conductor's read primitive — `resume` rehydrates the agent from
-     * `pathTo()`, and the turn loop projects it to messages via {@link messages}.
-     * Returns `[]` for an empty transcript or a dangling leaf.
-     */
-    pathTo(from?: string): TranscriptEntry[];
-    /** The active branch projected to the framework {@link AgentMessage} list. */
-    messages(from?: string): AgentMessage[];
-    /**
-     * Hydrate this store from a persisted session, replacing its current state.
-     *
-     * Reads the backend, parses it with {@link parseSessionText}, and rebuilds state
-     * via the {@link replay} reducer. If the file carried no head line, the head is
-     * pinned to the deepest leaf reachable from the entries. Returns `true` when a
-     * session was found and loaded, `false` when the backend had nothing.
-     */
-    load(sessionId?: string): Promise<boolean>;
-    /**
-     * Open a persisted session by id, returning a hydrated store (or `null` if the
-     * backend has no such session). The static counterpart to {@link load}.
-     */
-    static open(sessionId: string, options?: TranscriptStoreOptions): Promise<TranscriptStore | null>;
-    /** A point-in-time copy of the derived state (for inspection/testing). */
-    state(): TranscriptState;
+
+export function memoryBackend(): TranscriptBackend {
+  const files = new Map<string, string[]>();
+  return {
+    locate: (sessionId) => `mem:${sessionId}`,
+    read: async (sessionId) => {
+      const lines = files.get(sessionId);
+      return lines ? lines.join("\n") : null;
+    },
+    append: async (sessionId, line) => {
+      const lines = files.get(sessionId) ?? [];
+      lines.push(line);
+      files.set(sessionId, lines);
+    },
+    rewrite: async (sessionId, text) => {
+      files.set(sessionId, text.length === 0 ? [] : text.split("\n"));
+    },
+  };
 }
-/** Re-export the schema literal for callers building stores directly. */
+
+export function fsBackend(dir: string): TranscriptBackend {
+  const fileOf = async (sessionId: string) => {
+    const path = await import("node:path");
+    return path.join(dir, `${sessionId}.ndjson`);
+  };
+  return {
+    locate: (sessionId) => `${dir}/${sessionId}.ndjson`,
+    read: async (sessionId) => {
+      const fs = await import("node:fs/promises");
+      try { return await fs.readFile(await fileOf(sessionId), "utf8"); } catch { return null; }
+    },
+    append: async (sessionId, line) => {
+      const fs = await import("node:fs/promises");
+      await fs.mkdir(dir, { recursive: true });
+      await fs.appendFile(await fileOf(sessionId), `${line}\n`, "utf8");
+    },
+    rewrite: async (sessionId, text) => {
+      const fs = await import("node:fs/promises");
+      await fs.mkdir(dir, { recursive: true });
+      await fs.writeFile(await fileOf(sessionId), text.length === 0 ? "" : `${text}\n`, "utf8");
+    },
+  };
+}
+
+export function replay(sessionId: string, entries: readonly TranscriptEntry[], leaf: string | null): TranscriptState {
+  const nodes = new Map<string, TranscriptEntry>();
+  for (const entry of entries) nodes.set(entry.id, entry);
+  return { nodes, head: { sessionId, leaf } };
+}
+
+function deepestLeaf(entries: readonly TranscriptEntry[]): string | null {
+  if (entries.length === 0) return null;
+  const byId = new Map(entries.map((entry) => [entry.id, entry]));
+  const depthOf = (id: string) => {
+    let depth = 0;
+    let cursor: string | null = id;
+    const seen = new Set<string>();
+    while (cursor !== null && !seen.has(cursor)) {
+      seen.add(cursor);
+      const node = byId.get(cursor);
+      if (!node) break;
+      depth++;
+      cursor = node.parent;
+    }
+    return depth;
+  };
+  let best = entries[0];
+  let bestDepth = depthOf(best.id);
+  for (const entry of entries) {
+    const depth = depthOf(entry.id);
+    if (depth > bestDepth || (depth === bestDepth && entry.id > best.id)) {
+      best = entry;
+      bestDepth = depth;
+    }
+  }
+  return best.id;
+}
+
+const liveClock: TranscriptClock = { id: () => ulid(), now: () => new Date().toISOString() };
+
+export class TranscriptStore {
+  #state: TranscriptState;
+  readonly #backend: TranscriptBackend;
+  readonly #clock: TranscriptClock;
+
+  constructor(sessionId: string, options: TranscriptStoreOptions = {}) {
+    this.#backend = options.backend ?? memoryBackend();
+    this.#clock = options.clock ?? liveClock;
+    this.#state = replay(sessionId, [], null);
+  }
+
+  get sessionId(): string { return this.#state.head.sessionId; }
+  get head(): SessionHead { return this.#state.head; }
+  get usage(): Usage | undefined { return this.#state.head.usage; }
+  get size(): number { return this.#state.nodes.size; }
+  locate(sessionId = this.sessionId): string { return this.#backend.locate(sessionId); }
+  get(id: string): TranscriptEntry | undefined { return this.#state.nodes.get(id); }
+
+  async append(content: AgentMessage, role?: TranscriptRole, meta?: Readonly<Record<string, unknown>>): Promise<TranscriptEntry> {
+    const entry: TranscriptEntry = {
+      id: this.#clock.id(),
+      parent: this.#state.head.leaf,
+      role: role ?? roleForMessage(content),
+      content,
+      createdAt: this.#clock.now(),
+      ...(meta !== undefined ? { meta } : {}),
+    };
+    await this.#backend.append(this.sessionId, encodeEntry(entry));
+    this.#commit(entry);
+    return entry;
+  }
+
+  async persistUsage(usage: Usage): Promise<void> {
+    this.#state = { nodes: this.#state.nodes, head: { ...this.#state.head, usage } };
+    await this.#flush();
+  }
+
+  async branchAt(id: string): Promise<void> {
+    if (!this.#state.nodes.has(id)) throw new Error(`TranscriptStore.branchAt: unknown node "${id}"`);
+    this.#state = { nodes: this.#state.nodes, head: { sessionId: this.sessionId, leaf: id } };
+    await this.#flush();
+  }
+
+  async reset(): Promise<void> {
+    this.#state = { nodes: this.#state.nodes, head: { sessionId: this.sessionId, leaf: null } };
+    await this.#flush();
+  }
+
+  startNewSession(sessionId: string): void { this.#state = replay(sessionId, [], null); }
+
+  pathTo(from?: string): TranscriptEntry[] {
+    const chain: TranscriptEntry[] = [];
+    let cursor = from ?? this.#state.head.leaf;
+    const seen = new Set<string>();
+    while (cursor !== null) {
+      if (seen.has(cursor)) break;
+      seen.add(cursor);
+      const node = this.#state.nodes.get(cursor);
+      if (!node) break;
+      chain.push(node);
+      cursor = node.parent;
+    }
+    return chain.reverse();
+  }
+
+  messages(from?: string): AgentMessage[] { return this.pathTo(from).map((entry) => entry.content); }
+
+  async load(sessionId = this.sessionId): Promise<boolean> {
+    const text = await this.#backend.read(sessionId);
+    if (text === null) return false;
+    const parsed = parseSessionText(sessionId, text);
+    const leaf = parsed.head?.leaf ?? deepestLeaf(parsed.entries);
+    const base = replay(sessionId, parsed.entries, leaf);
+    this.#state = parsed.head?.usage === undefined ? base : { nodes: base.nodes, head: { ...base.head, usage: parsed.head.usage } };
+    return true;
+  }
+
+  static async open(sessionId: string, options: TranscriptStoreOptions = {}): Promise<TranscriptStore | null> {
+    const store = new TranscriptStore(sessionId, options);
+    return await store.load(sessionId) ? store : null;
+  }
+
+  state(): TranscriptState { return this.#state; }
+
+  #commit(entry: TranscriptEntry): void {
+    const nodes = new Map(this.#state.nodes);
+    nodes.set(entry.id, entry);
+    this.#state = { nodes, head: { sessionId: this.sessionId, leaf: entry.id } };
+  }
+
+  async #flush(): Promise<void> {
+    const lines = [encodeHead(this.#state.head), ...[...this.#state.nodes.values()].map(encodeEntry)];
+    await this.#backend.rewrite(this.sessionId, lines.join("\n"));
+  }
+}
+
 export { TRANSCRIPT_SCHEMA };

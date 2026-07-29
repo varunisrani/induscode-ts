@@ -1,99 +1,189 @@
-// @ts-nocheck
-// Type declarations recovered from dist/types (no runtime body)
 /**
  * Launch pickers — `pickResumeTarget` and `browseSettings`.
- *
- * Two thin, injectable selection surfaces:
- *
- *   - {@link pickResumeTarget} loads the resumable sessions (current cwd plus
- *     every directory), de-duplicates by path, sorts newest-first, and lets the
- *     user choose one through the framework React-Ink `StartupSessionPicker`. On a
- *     non-interactive stdin it skips the picker and resolves the newest session,
- *     so a piped invocation still resumes deterministically.
- *
- *   - {@link browseSettings} prints a plain readline listing of the resolved
- *     settings and the discovered user resources, then waits for a keypress. No
- *     TUI — a flat console dump the user reads and dismisses.
- *
- * Both keep their effectful pieces (the Ink mount, the readline pause, the TTY
- * probe) behind injectable seams so the selection logic is unit-testable without
- * a terminal.
  */
-import type { ResumeFault, ResumeRef, SessionLoader, SettingsBrowseOptions } from "./contract";
-/**
- * The effectful seams {@link pickResumeTarget} depends on. Injected so a test can
- * report a non-interactive terminal and stub the picker mount.
- */
+import { createInterface } from "node:readline/promises";
+import { createElement } from "indusagi/react-host";
+import { render } from "indusagi/react-host/ink";
+import { StartupSessionPicker } from "indusagi/react-ink";
+import type {
+  ResumeFault,
+  ResumeRef,
+  SessionLoader,
+  SettingsBrowseOptions,
+} from "./contract.js";
+
 export interface ResumeDeps {
-    /** Whether stdin is an interactive terminal (drives the non-TTY fast-path). */
-    isInteractive(): boolean;
-    /**
-     * Mount the picker over the session list and resolve with the chosen session,
-     * or `null` when the user dismisses it.
-     */
-    mountPicker(sessions: readonly ResumeRef[], totalCount: number): Promise<ResumeRef | null>;
+  isInteractive(): boolean;
+  mountPicker(sessions: readonly ResumeRef[], totalCount: number): Promise<ResumeRef | null>;
 }
-/** The live {@link ResumeDeps}: a real TTY probe and the Ink picker mount. */
-export declare function defaultResumeDeps(): ResumeDeps;
+
+/**
+ * The live {@link ResumeDeps}: a real TTY probe and the Ink picker mount.
+ */
+export function defaultResumeDeps(): ResumeDeps {
+  return {
+    isInteractive(): boolean {
+      return Boolean(process.stdin.isTTY && process.stdout.isTTY);
+    },
+    mountPicker(sessions, totalCount): Promise<ResumeRef | null> {
+      const byPath = new Map(sessions.map((s) => [s.path, s]));
+      return new Promise<ResumeRef | null>((resolve, reject) => {
+        let settled = false;
+        const settle = (value: ResumeRef | null): void => {
+          if (settled) return;
+          settled = true;
+          instance.unmount();
+          resolve(value);
+        };
+        let instance: { unmount: () => void; waitUntilExit: () => Promise<void> };
+        try {
+          instance = render(
+            createElement(StartupSessionPicker, {
+              sessions: [...sessions],
+              totalCount,
+              onClose: () => settle(null),
+              onSelect: (session: ResumeRef) => settle(byPath.get(session.path) ?? null),
+            }),
+          );
+        } catch (cause) {
+          reject(cause);
+          return;
+        }
+        void instance.waitUntilExit().then(() => {
+          if (!settled) {
+            settled = true;
+            resolve(null);
+          }
+        });
+      });
+    },
+  };
+}
+
 /**
  * Merge two session lists into one newest-first list de-duplicated by path.
- *
- * Earlier entries win the path key, then the merged set is sorted by
- * `lastModified` descending. Pure; the picker and the fast-path both consume it.
  */
-export declare function mergeSessions(current: readonly ResumeRef[], all: readonly ResumeRef[]): ResumeRef[];
-/**
- * The outcome of {@link pickResumeTarget}: the chosen session path, or `null`
- * when there was nothing to resume or the user dismissed the picker. A typed
- * {@link ResumeFault} is returned (never thrown) when the load or mount failed.
- */
-export interface ResumeOutcome {
-    /** The selected session file path, or `null` for none. */
-    readonly path: string | null;
-    /** A typed failure, present only when the resume flow could not run. */
-    readonly fault?: ResumeFault;
+export function mergeSessions(
+  current: readonly ResumeRef[],
+  all: readonly ResumeRef[],
+): ResumeRef[] {
+  const byPath = new Map<string, ResumeRef>();
+  for (const session of [...current, ...all]) {
+    if (!byPath.has(session.path)) byPath.set(session.path, session);
+  }
+  return [...byPath.values()].sort((a, b) => b.lastModified - a.lastModified);
 }
+
+export interface ResumeOutcome {
+  readonly path: string | null;
+  readonly fault?: ResumeFault;
+}
+
 /**
  * Choose a session to resume.
- *
- * Loads the current-directory and all-directory session lists, merges them
- * (de-dupe by path, newest first), and either mounts the React-Ink picker or —
- * on a non-interactive stdin — resolves the newest session directly. An empty
- * merged list resolves to `{ path: null }`.
- *
- * @param loadCurrent loader for sessions started in the active cwd
- * @param loadAll     loader for sessions across every directory
- * @param deps        injectable TTY probe and picker mount (defaults to live)
  */
-export declare function pickResumeTarget(loadCurrent: SessionLoader, loadAll: SessionLoader, deps?: ResumeDeps): Promise<ResumeOutcome>;
-/**
- * The effectful seams {@link browseSettings} depends on: a line sink and a pause
- * that waits for the user to press a key. Injected so a test captures the listing
- * and resolves the pause immediately.
- */
-export interface SettingsBrowseIo {
-    /** Emit one line of the listing. */
-    print(line: string): void;
-    /** Wait for the user to dismiss the listing (e.g. press Enter). */
-    pause(prompt: string): Promise<void>;
+export async function pickResumeTarget(
+  loadCurrent: SessionLoader,
+  loadAll: SessionLoader,
+  deps: ResumeDeps = defaultResumeDeps(),
+): Promise<ResumeOutcome> {
+  let current: ResumeRef[];
+  let all: ResumeRef[];
+  try {
+    [current, all] = await Promise.all([loadCurrent(), loadAll()]);
+  } catch (cause) {
+    return {
+      path: null,
+      fault: {
+        message: "Failed to load resumable sessions.",
+        cause,
+      },
+    };
+  }
+  const sessions = mergeSessions(current, all);
+  if (sessions.length === 0) return { path: null };
+  if (!deps.isInteractive()) {
+    return { path: sessions[0].path };
+  }
+  try {
+    const chosen = await deps.mountPicker(sessions, sessions.length);
+    return { path: chosen === null ? null : chosen.path };
+  } catch (cause) {
+    return {
+      path: null,
+      fault: {
+        message: "The session picker failed to start.",
+        cause,
+      },
+    };
+  }
 }
-/** The live {@link SettingsBrowseIo}: stdout plus a readline pause. */
-export declare function defaultSettingsBrowseIo(): SettingsBrowseIo;
+
+export interface SettingsBrowseIo {
+  print(line: string): void;
+  pause(prompt: string): Promise<void>;
+}
+
+export function defaultSettingsBrowseIo(): SettingsBrowseIo {
+  return {
+    print(line: string): void {
+      process.stdout.write(line.endsWith("\n") ? line : `${line}\n`);
+    },
+    async pause(prompt: string): Promise<void> {
+      const rl = createInterface({ input: process.stdin, output: process.stdout });
+      try {
+        await rl.question(prompt);
+      } finally {
+        rl.close();
+      }
+    },
+  };
+}
+
+function renderSection(title: string, paths: readonly string[]): string[] {
+  if (paths.length === 0) return [`${title}: (none)`];
+  return [`${title}:`, ...paths.map((path) => `  - ${path}`)];
+}
+
 /**
- * Build the entire settings listing as an array of lines. Pure — it consumes the
- * resolved settings, the active cwd, the profile directory, and the grouped
- * resource paths, and produces the flat dump {@link browseSettings} prints. Kept
- * separate so a test can assert the content without an io seam.
+ * Build the entire settings listing as an array of lines.
  */
-export declare function renderSettingsListing(opts: SettingsBrowseOptions): string[];
+export function renderSettingsListing(opts: SettingsBrowseOptions): string[] {
+  const lines: string[] = [];
+  lines.push("Configuration");
+  lines.push(`  Working directory: ${opts.cwd}`);
+  lines.push(`  Profile directory: ${opts.profileDir}`);
+  lines.push("");
+  lines.push("Settings");
+  lines.push(`  Default model: ${opts.settings.defaultModel ?? "(unset)"}`);
+  lines.push(
+    `  System prompt: ${opts.settings.systemPrompt !== undefined ? "(custom)" : "(default)"}`,
+  );
+  const serverCount = opts.settings.mcpServers?.length ?? 0;
+  lines.push(`  MCP servers: ${serverCount}`);
+  lines.push("");
+  const categories = Object.keys(opts.resolvedPaths).sort();
+  if (categories.length === 0) {
+    lines.push("Resources: (none discovered)");
+  } else {
+    lines.push("Resources");
+    for (const category of categories) {
+      for (const line of renderSection(`  ${category}`, opts.resolvedPaths[category])) {
+        lines.push(line);
+      }
+    }
+  }
+  return lines;
+}
+
 /**
  * Print the settings / resource listing and wait for the user to dismiss it.
- *
- * A plain console dump — no TUI. It renders the resolved settings summary and the
- * discovered resources grouped by category, then pauses for a keypress so the
- * listing stays on screen.
- *
- * @param opts the resolved settings, resource paths, cwd, and profile directory
- * @param io   the injectable line sink and pause (defaults to stdout + readline)
  */
-export declare function browseSettings(opts: SettingsBrowseOptions, io?: SettingsBrowseIo): Promise<void>;
+export async function browseSettings(
+  opts: SettingsBrowseOptions,
+  io: SettingsBrowseIo = defaultSettingsBrowseIo(),
+): Promise<void> {
+  for (const line of renderSettingsListing(opts)) io.print(line);
+  io.print("");
+  await io.pause("Press Enter to continue. ");
+}

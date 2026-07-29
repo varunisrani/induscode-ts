@@ -1,5 +1,3 @@
-// @ts-nocheck
-// Type declarations recovered from dist/types (no runtime body)
 /**
  * Durable cross-session memory — a disk-backed working-memory store and the
  * project-context document that carries it into each session's system prompt.
@@ -29,20 +27,24 @@
  *   - Files are written `0o600` (owner-only), matching the auth vault — the memory
  *     note can hold sensitive project facts.
  */
-import type { ContextDoc } from "../../briefing";
-import { MEMORY_HANDLE_KEY, type MemoryStore } from "../../capability-deck";
-import type { Workspace } from "../contract";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import type { ContextDoc } from "../../briefing/index.js";
+import { type MemoryStore } from "../../capability-deck/index.js";
+import type { Workspace } from "../contract.js";
+
 /** The on-disk filename the durable memory note is stored under. */
-export declare const MEMORY_ENTRYPOINT = "MEMORY.md";
+export const MEMORY_ENTRYPOINT = "MEMORY.md";
 /** Maximum number of lines of the memory note inlined into the prompt. */
-export declare const MAX_ENTRYPOINT_LINES = 200;
+export const MAX_ENTRYPOINT_LINES = 200;
 /**
  * Maximum bytes of the memory note inlined into the prompt.
  *
  * ~125 chars/line at 200 lines: this catches long-line indexes that slip past
  * the line cap (a few very long lines can be far larger than 200 short ones).
  */
-export declare const MAX_ENTRYPOINT_BYTES = 25000;
+export const MAX_ENTRYPOINT_BYTES = 25000;
+
 /**
  * Cap the memory note to {@link MAX_ENTRYPOINT_LINES} and
  * {@link MAX_ENTRYPOINT_BYTES}, appending a warning naming which cap fired.
@@ -54,7 +56,29 @@ export declare const MAX_ENTRYPOINT_BYTES = 25000;
  * @param raw the raw memory-file text
  * @returns the prompt-safe body (possibly with a trailing truncation warning)
  */
-export declare function truncateEntrypointContent(raw: string): string;
+export function truncateEntrypointContent(raw: string): string {
+  const trimmed = raw.trim();
+  const contentLines = trimmed.split("\n");
+  const lineCount = contentLines.length;
+  const byteCount = trimmed.length;
+  const wasLineTruncated = lineCount > MAX_ENTRYPOINT_LINES;
+  const wasByteTruncated = byteCount > MAX_ENTRYPOINT_BYTES;
+  if (!wasLineTruncated && !wasByteTruncated) {
+    return trimmed;
+  }
+  let truncated = wasLineTruncated ? contentLines.slice(0, MAX_ENTRYPOINT_LINES).join("\n") : trimmed;
+  if (truncated.length > MAX_ENTRYPOINT_BYTES) {
+    const cutAt = truncated.lastIndexOf("\n", MAX_ENTRYPOINT_BYTES);
+    truncated = truncated.slice(0, cutAt > 0 ? cutAt : MAX_ENTRYPOINT_BYTES);
+  }
+  const reason = wasByteTruncated && !wasLineTruncated
+    ? `${byteCount} bytes (limit: ${MAX_ENTRYPOINT_BYTES}) \u2014 index entries are too long`
+    : wasLineTruncated && !wasByteTruncated
+      ? `${lineCount} lines (limit: ${MAX_ENTRYPOINT_LINES})`
+      : `${lineCount} lines and ${byteCount} bytes`;
+  return `${truncated}\n\n> WARNING: ${MEMORY_ENTRYPOINT} is ${reason}. Only part of it was loaded. Keep index entries to one line under ~200 chars; move detail into topic files.`;
+}
+
 /**
  * The per-cwd memory directory under the profile dir: `<profileDir>/memory/--<slug>--`.
  *
@@ -67,7 +91,11 @@ export declare function truncateEntrypointContent(raw: string): string;
  * @param workspace the resolved on-disk layout (supplies the profile dir)
  * @param cwd       the run's working directory
  */
-export declare function memoryDirFor(workspace: Workspace, cwd: string): string;
+export function memoryDirFor(workspace: Workspace, cwd: string): string {
+  const slug = cwd.replace(/[^a-zA-Z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+  return join(workspace.profileDir, "memory", `--${slug}--`);
+}
+
 /**
  * A synchronous, disk-backed {@link MemoryStore} persisting the working-memory
  * note to `<memDir>/MEMORY.md`.
@@ -78,17 +106,38 @@ export declare function memoryDirFor(workspace: Workspace, cwd: string): string;
  * fall back to the in-memory store. Writes create the directory and use mode
  * `0o600` (owner-only), matching the auth vault.
  */
-export declare class DiskMemoryStore implements MemoryStore {
-    private readonly memDir;
-    private readonly file;
-    constructor(memDir: string);
-    /** The current note, or `""` when no file has been written yet. */
-    read(): string;
-    /** Overwrite the note, creating the memory directory as needed (mode 0o600). */
-    replace(content: string): void;
-    /** Add a single line to the end of the note (composed of read + replace). */
-    append(line: string): void;
+export class DiskMemoryStore implements MemoryStore {
+  private readonly memDir: string;
+  private readonly file: string;
+
+  constructor(memDir: string) {
+    this.memDir = memDir;
+    this.file = join(memDir, MEMORY_ENTRYPOINT);
+  }
+
+  /** The current note, or `""` when no file has been written yet. */
+  read(): string {
+    try {
+      return existsSync(this.file) ? readFileSync(this.file, "utf8") : "";
+    } catch {
+      return "";
+    }
+  }
+
+  /** Overwrite the note, creating the memory directory as needed (mode 0o600). */
+  replace(content: string): void {
+    mkdirSync(this.memDir, { recursive: true });
+    writeFileSync(this.file, content, { mode: 384 });
+  }
+
+  /** Add a single line to the end of the note (composed of read + replace). */
+  append(line: string): void {
+    const current = this.read();
+    const next = current.length === 0 ? line : `${current}\n${line}`;
+    this.replace(next);
+  }
 }
+
 /**
  * Load the per-cwd memory note as a {@link ContextDoc} for the briefing's
  * `# Project context` section, or `undefined` when there is nothing to show.
@@ -100,6 +149,20 @@ export declare class DiskMemoryStore implements MemoryStore {
  *
  * @param memDir the per-cwd memory directory from {@link memoryDirFor}
  */
-export declare function loadMemoryDoc(memDir: string): ContextDoc | undefined;
+export function loadMemoryDoc(memDir: string): ContextDoc | undefined {
+  let raw: string | undefined;
+  try {
+    const file = join(memDir, MEMORY_ENTRYPOINT);
+    if (!existsSync(file)) return undefined;
+    raw = readFileSync(file, "utf8");
+  } catch {
+    return undefined;
+  }
+  if (raw === undefined) return undefined;
+  const body = truncateEntrypointContent(raw);
+  if (body.length === 0) return undefined;
+  return { path: MEMORY_ENTRYPOINT, body };
+}
+
 /** Re-exported so hosts wiring a store can use one import. */
-export { MEMORY_HANDLE_KEY };
+export { MEMORY_HANDLE_KEY } from "../../capability-deck/index.js";

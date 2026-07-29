@@ -1,83 +1,260 @@
-// @ts-nocheck
-// Type declarations recovered from dist/types (no runtime body)
 /**
  * publishTranscript — render a session transcript to a standalone, self-contained
  * HTML document.
- *
- * The publisher takes a list of transcript entries (each carrying a framework
- * message) and produces one HTML string with no external dependencies: prose is
- * rendered to HTML with `marked`, fenced code is syntax-highlighted with
- * `highlight.js`, terminal-styled tool output is painted to spans by
- * {@link paintSgr}, and all colors come from a {@link ThemeBridge} over an
- * {@link ExportTheme}. Markdown and highlighting are run *here*, at publish time,
- * so the rendered HTML is baked into the page payload and the page needs no
- * client-side parser to display — the page ships ready to read.
- *
- * The two third-party libraries this layer leans on are MIT (`marked`) and
- * BSD-3-Clause (`highlight.js`); their license notices are preserved verbatim in
- * the emitted document (the `MARKED_LIB` / `HIGHLIGHT_LIB` shell slots) as the
- * licenses require, while the libraries themselves are used, never reimplemented.
  */
-import { type ImageContent, type PublishOptions, type TextContent } from "../briefing/contract";
-/**
- * The conversational role a published turn carries. Mirrors the conductor's node
- * roles but is declared locally so the publisher depends only on the briefing
- * contract, not on the conductor subsystem.
- */
-export type PublishRole = "user" | "assistant" | "tool" | "system" | "condense" | "note";
-/**
- * One transcript node the publisher consumes. Structurally a subset of the
- * conductor's persisted entry: a `role` for attribution and a `message` carrying
- * the framework content this node renders. The `message` is read with narrow
- * structural access so the publisher never imports the framework message union.
- */
-export interface PublishEntry {
-    /** Attribution role for this node. */
-    readonly role: PublishRole;
-    /** The framework message payload to render. */
-    readonly message: PublishMessage;
+import hljs from "highlight.js";
+import { marked } from "marked";
+import { briefingFault, type ExportTheme } from "../briefing/contract.js";
+import { paintSgr } from "./sgr.js";
+import { CLIENT_SCRIPT, fill, PAGE_SHELL, PAGE_STYLES, SHELL_SLOTS } from "./template.js";
+import { createThemeBridge, DefaultThemeBridge } from "./theme-bridge.js";
+
+interface TextPart {
+  type: "text";
+  text: string;
 }
-/**
- * The narrow view of a framework message the publisher reads. Covers the three
- * concrete message roles' content shapes plus the tool-call linkage a tool result
- * carries, without redeclaring the whole framework union.
- */
-export interface PublishMessage {
-    /** The framework message role. */
-    readonly role: string;
-    /** The message content — a bare string or a list of content parts. */
-    readonly content: string | readonly MessagePart[];
-    /** Present on tool-result messages; links the node to its originating call. */
+
+interface ImagePart {
+  type: "image";
+  data: string;
+  mimeType: string;
+}
+
+interface ThinkingPart {
+  type: "thinking";
+  thinking: string;
+}
+
+interface ToolCallPart {
+  type: "toolCall";
+  id: string;
+  name: string;
+  arguments: unknown;
+}
+
+type ContentPart = TextPart | ImagePart | ThinkingPart | ToolCallPart | { type: string };
+
+export interface TranscriptEntry {
+  readonly role: "user" | "assistant" | "tool" | "system" | "condense" | "note";
+  readonly message: {
+    readonly content: string | readonly ContentPart[];
     readonly toolCallId?: string;
-    /** Present on tool-result messages; the invoked tool's display name. */
     readonly toolName?: string;
+  };
 }
-/**
- * The content-part union the publisher renders. Text and image parts alias the
- * framework's; thinking and tool-call parts are read structurally so the
- * assistant turn can surface a call's name and arguments.
- */
-export type MessagePart = TextContent | ImageContent | {
-    readonly type: "thinking";
-    readonly thinking: string;
-} | {
-    readonly type: "toolCall";
-    readonly id: string;
-    readonly name: string;
-    readonly arguments: Readonly<Record<string, unknown>>;
+
+export interface TranscriptWidget {
+  readonly callId: string;
+  readonly html: string;
+}
+
+export interface PublishOptions {
+  readonly theme?: ExportTheme;
+  readonly title?: string;
+  readonly widgets?: readonly TranscriptWidget[];
+}
+
+const MARKED_LICENSE = [
+  "marked \u2014 https://github.com/markedjs/marked",
+  "Copyright (c) 2018+, MarkedJS",
+  "Copyright (c) 2011-2018, Christopher Jeffrey",
+  "Released under the MIT License.",
+].join("\n");
+
+const HIGHLIGHT_LICENSE = [
+  "highlight.js \u2014 https://github.com/highlightjs/highlight.js",
+  "Copyright (c) 2006, Ivan Sagalaev. All rights reserved.",
+  "Released under the BSD-3-Clause License.",
+].join("\n");
+
+const ROLE_LABEL: Readonly<Record<TranscriptEntry["role"], string>> = {
+  user: "You",
+  assistant: "Assistant",
+  tool: "Tool",
+  system: "System",
+  condense: "Summary",
+  note: "Note",
 };
-/**
- * Render a session transcript to a standalone HTML document.
- *
- * Configures the markdown + highlight pipeline, renders every entry to a turn,
- * serializes the turns into a base64 payload, resolves the theme through a
- * {@link ThemeBridge}, and fills the page shell. The returned string is a complete
- * `<!doctype html>` document with all styling, content, and the preserved library
- * notices inlined — it can be written to disk and opened directly.
- *
- * @param entries the transcript nodes to publish, in display order
- * @param opts    optional theme, title, output directory, and widget overrides
- * @returns the rendered standalone HTML document
- * @throws a {@link briefingFault} of kind `"publish"` if assembly fails
- */
-export declare function publishTranscript(entries: readonly PublishEntry[], opts?: PublishOptions): string;
+
+function escapeHtml2(text: string): string {
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function hasAnsi(text: string): boolean {
+  return /\x1B\[/.test(text);
+}
+
+function highlightCode(code: string, language?: string): string {
+  try {
+    if (language && hljs.getLanguage(language)) {
+      return hljs.highlight(code, { language }).value;
+    }
+    return hljs.highlightAuto(code).value;
+  } catch {
+    return escapeHtml2(code);
+  }
+}
+
+function configuredMarked(): typeof marked {
+  marked.setOptions({ gfm: true, breaks: false, async: false });
+  marked.use({
+    renderer: {
+      code(token: string | { text: string; lang?: string }): string {
+        const text = typeof token === "string" ? token : token.text;
+        const lang =
+          typeof token === "string" ? undefined : (token.lang || "").trim() || undefined;
+        const highlighted = highlightCode(text, lang);
+        const cls = lang ? ` class="language-${escapeHtml2(lang)}"` : "";
+        return `<pre><code${cls}>${highlighted}</code></pre>`;
+      },
+    },
+  });
+  return marked;
+}
+
+function renderMarkdown(md: typeof marked, source: string): string {
+  const out = md.parse(source, { async: false });
+  return typeof out === "string" ? out : "";
+}
+
+function renderImage(part: ImagePart): string {
+  const src = `data:${escapeHtml2(part.mimeType)};base64,${part.data}`;
+  return `<img alt="attached image" src="${src}" />`;
+}
+
+function renderToolCall(name: string, args: unknown): string {
+  let payload: string;
+  try {
+    payload = JSON.stringify(args, null, 2);
+  } catch {
+    payload = String(args);
+  }
+  return `<div class="tool-frame"><strong>${escapeHtml2(name)}</strong>\n${escapeHtml2(payload)}</div>`;
+}
+
+function renderToolText(text: string): string {
+  const inner = hasAnsi(text) ? paintSgr(text) : escapeHtml2(text);
+  return `<pre class="tool-frame">${inner}</pre>`;
+}
+
+function partsOf(content: string | readonly ContentPart[]): readonly ContentPart[] {
+  if (typeof content === "string") {
+    return [{ type: "text", text: content }];
+  }
+  return content;
+}
+
+interface RenderedTurn {
+  readonly kind: "turn" | "note";
+  readonly role: TranscriptEntry["role"];
+  readonly label: string;
+  readonly html: string;
+}
+
+function renderEntry(
+  entry: TranscriptEntry,
+  md: typeof marked,
+  widgets: Map<string, TranscriptWidget>,
+): RenderedTurn {
+  const role = entry.role;
+  const label = ROLE_LABEL[role] ?? role;
+  if (role === "tool" && entry.message.toolCallId !== undefined) {
+    const widget = widgets.get(entry.message.toolCallId);
+    if (widget !== undefined) {
+      return { kind: "turn", role, label, html: widget.html };
+    }
+  }
+  const fragments: string[] = [];
+  for (const part of partsOf(entry.message.content)) {
+    switch (part.type) {
+      case "text":
+        if (role === "tool") {
+          fragments.push(renderToolText((part as TextPart).text));
+        } else {
+          fragments.push(renderMarkdown(md, (part as TextPart).text));
+        }
+        break;
+      case "image":
+        fragments.push(renderImage(part as ImagePart));
+        break;
+      case "thinking":
+        fragments.push(
+          `<div class="aside-note">${escapeHtml2((part as ThinkingPart).thinking)}</div>`,
+        );
+        break;
+      case "toolCall": {
+        const tc = part as ToolCallPart;
+        fragments.push(renderToolCall(tc.name, tc.arguments));
+        break;
+      }
+      default:
+        break;
+    }
+  }
+  const html = fragments.join("\n");
+  const kind: "turn" | "note" = role === "system" || role === "condense" ? "note" : "turn";
+  return { kind, role, label, html };
+}
+
+function toBase64(text: string): string {
+  if (typeof Buffer !== "undefined") {
+    return Buffer.from(text, "utf-8").toString("base64");
+  }
+  const bytes = encodeURIComponent(text).replace(/%([0-9A-F]{2})/g, (_m, h) =>
+    String.fromCharCode(parseInt(h, 16)),
+  );
+  return btoa(bytes);
+}
+
+function themeVarsBlock(bridge: DefaultThemeBridge): string {
+  const vars = bridge.toCssVars();
+  const hyphenate = (name: string): string =>
+    name.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`);
+  return Object.entries(vars)
+    .map(([token, value]) => `  --x-${hyphenate(token)}: ${value};`)
+    .join("\n");
+}
+
+export function publishTranscript(
+  entries: readonly TranscriptEntry[],
+  opts: PublishOptions = {},
+): string {
+  try {
+    const bridge = opts.theme ? createThemeBridge(opts.theme) : createThemeBridge();
+    const md = configuredMarked();
+    const widgetIndex = new Map<string, TranscriptWidget>(
+      (opts.widgets ?? []).map((w) => [w.callId, w]),
+    );
+    const turns = entries.map((entry) => renderEntry(entry, md, widgetIndex));
+    const title = opts.title ?? "Session Transcript";
+    const payloadJson = JSON.stringify({
+      title,
+      turns: turns.map((t) => ({
+        kind: t.kind === "note" ? "note" : undefined,
+        role: t.role,
+        label: t.label,
+        html: t.html,
+      })),
+    });
+    const payload = toBase64(payloadJson);
+    const slots: Record<string, string> = {
+      [SHELL_SLOTS.themeVars]: themeVarsBlock(bridge),
+      [SHELL_SLOTS.pageSurface]: bridge.theme.pageSurface,
+      [SHELL_SLOTS.cardSurface]: bridge.theme.cardSurface,
+      [SHELL_SLOTS.noteSurface]: bridge.theme.noteSurface,
+      [SHELL_SLOTS.styles]: PAGE_STYLES,
+      [SHELL_SLOTS.script]: CLIENT_SCRIPT,
+      [SHELL_SLOTS.payload]: payload,
+      [SHELL_SLOTS.markedLib]: MARKED_LICENSE,
+      [SHELL_SLOTS.highlightLib]: HIGHLIGHT_LICENSE,
+    };
+    return fill(PAGE_SHELL, slots);
+  } catch (cause) {
+    throw briefingFault("publish", "Failed to render the HTML transcript.", cause);
+  }
+}

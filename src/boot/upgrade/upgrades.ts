@@ -1,5 +1,3 @@
-// @ts-nocheck
-// Type declarations recovered from dist/types (no runtime body)
 /**
  * Upgrade registry — the ordered, idempotent catalog of one-time profile
  * migrations.
@@ -33,7 +31,10 @@
  * framework's private per-cwd directory encoding. If the framework later exports
  * an encoder, swap the helper for the import without touching the step logic.
  */
-import type { Workspace } from "../contract";
+import { promises as fs, constants as fsConstants } from "node:fs";
+import { join, dirname, basename } from "node:path";
+import type { Workspace } from "../contract.js";
+
 /**
  * One ordered, idempotent profile-layout upgrade.
  *
@@ -44,18 +45,69 @@ import type { Workspace } from "../contract";
  * any state — fresh, partially-migrated, or fully-migrated.
  */
 export interface Upgrade {
-    /** Durable identifier recorded once this step has run. Never rename. */
-    readonly id: string;
-    /** One-line human summary for logs and `--verbose` output. */
-    readonly describe: string;
-    /**
-     * Perform the upgrade against the resolved {@link Workspace}. Must be
-     * idempotent: detect "already applied" and return without side effects.
-     *
-     * @param ws The resolved, absolute on-disk layout.
-     */
-    apply(ws: Workspace): Promise<void>;
+  /** Durable identifier recorded once this step has run. Never rename. */
+  readonly id: string;
+  /** One-line human summary for logs and `--verbose` output. */
+  readonly describe: string;
+  /**
+   * Perform the upgrade against the resolved {@link Workspace}. Must be
+   * idempotent: detect "already applied" and return without side effects.
+   *
+   * @param ws The resolved, absolute on-disk layout.
+   */
+  apply(ws: Workspace): Promise<void>;
 }
+
+const SECURE_FILE_MODE = 384;
+const RETIRED_SUFFIX = ".retired";
+
+async function pathExists(target: string): Promise<boolean> {
+  try {
+    await fs.access(target, fsConstants.F_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function isDirectory(target: string): Promise<boolean> {
+  try {
+    return (await fs.stat(target)).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+async function isFile(target: string): Promise<boolean> {
+  try {
+    return (await fs.stat(target)).isFile();
+  } catch {
+    return false;
+  }
+}
+
+async function readJsonOrUndefined(target: string): Promise<unknown> {
+  try {
+    return JSON.parse(await fs.readFile(target, "utf8"));
+  } catch {
+    return undefined;
+  }
+}
+
+async function writeJsonWithMode(target: string, value: unknown, mode: number): Promise<void> {
+  await fs.mkdir(dirname(target), { recursive: true });
+  await fs.writeFile(target, `${JSON.stringify(value, null, 2)}\n`, { mode });
+  await fs.chmod(target, mode);
+}
+
+async function relocateWithoutClobber(from: string, into: string): Promise<boolean> {
+  if (!(await pathExists(from))) return false;
+  if (await pathExists(into)) return false;
+  await fs.mkdir(dirname(into), { recursive: true });
+  await fs.rename(from, into);
+  return true;
+}
+
 /**
  * Compute the per-project transcript sub-directory *name* for a working
  * directory.
@@ -75,7 +127,27 @@ export interface Upgrade {
  * @param cwd Absolute working directory the transcript belongs to.
  * @returns A safe directory leaf such as `proj-Users-me-app-1a2b3c4d`.
  */
-export declare function projectTranscriptDirName(cwd: string): string;
+export function projectTranscriptDirName(cwd: string): string {
+  const trimmed = cwd.trim() || "root";
+  const folded = trimmed.split(/[^A-Za-z0-9]+/u).filter((segment) => segment.length > 0).join("-");
+  const token = folded.length > 0 ? folded : "root";
+  return `proj-${token}-${shortPathHash(trimmed)}`;
+}
+
+function shortPathHash(input: string): string {
+  let hash = 2166136261;
+  for (let i = 0; i < input.length; i++) {
+    hash ^= input.charCodeAt(i);
+    hash = Math.imul(hash, 16777619) >>> 0;
+  }
+  return hash.toString(16).padStart(8, "0");
+}
+
+const LEGACY_OAUTH_FILE = "oauth.json";
+const LEGACY_SETTINGS_FILE = "settings.json";
+const MANAGED_HELPER_BASENAMES = ["fd", "rg", "fd.exe", "rg.exe"];
+const LEGACY_PROMPTS_DIRNAME = "commands";
+
 /**
  * Fold a legacy split credential layout — a standalone `oauth.json` plus an
  * `apiKeys` block embedded in `settings.json` — into the single consolidated
@@ -86,7 +158,47 @@ export declare function projectTranscriptDirName(cwd: string): string;
  * the `apiKeys` block is removed from `settings.json`, so a second run finds no
  * legacy sources and the existing `auth.json` short-circuits it regardless.
  */
-export declare const foldCredentials: Upgrade;
+export const foldCredentials: Upgrade = {
+  id: "fold-credentials-into-secure-auth-file",
+  describe: "Consolidate legacy oauth.json + settings.apiKeys into a 0600 auth.json",
+  async apply(ws) {
+    if (await pathExists(ws.authPath)) return;
+    const legacyOauthPath = join(ws.profileDir, LEGACY_OAUTH_FILE);
+    const legacySettingsPath = join(ws.profileDir, LEGACY_SETTINGS_FILE);
+    const oauth = await readJsonOrUndefined(legacyOauthPath);
+    const settings = await readJsonOrUndefined(legacySettingsPath);
+    const apiKeys = (settings as { apiKeys?: unknown } | undefined)?.apiKeys;
+    const haveOauth = oauth !== undefined && Object.keys(oauth as object).length > 0;
+    const haveApiKeys = apiKeys !== undefined && Object.keys(apiKeys as object).length > 0;
+    if (!haveOauth && !haveApiKeys) return;
+    const folded: Record<string, unknown> = {};
+    if (haveOauth) folded.oauth = oauth;
+    if (haveApiKeys) folded.apiKeys = apiKeys;
+    await writeJsonWithMode(ws.authPath, folded, SECURE_FILE_MODE);
+    if (await isFile(legacyOauthPath)) {
+      const retiredOauth = `${legacyOauthPath}${RETIRED_SUFFIX}`;
+      if (!(await pathExists(retiredOauth))) {
+        await fs.rename(legacyOauthPath, retiredOauth);
+      }
+    }
+    if (haveApiKeys && settings && (await isFile(legacySettingsPath))) {
+      const { apiKeys: _migrated, ...remaining } = settings as { apiKeys?: unknown } & Record<string, unknown>;
+      await fs.writeFile(legacySettingsPath, `${JSON.stringify(remaining, null, 2)}\n`);
+    }
+  },
+};
+
+async function readTranscriptHeader(filePath: string): Promise<{ type?: string; cwd?: string } | undefined> {
+  try {
+    const content = await fs.readFile(filePath, "utf8");
+    const firstLine = content.split("\n", 1)[0]?.trim();
+    if (!firstLine) return undefined;
+    return JSON.parse(firstLine);
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * Relocate loose `*.jsonl` transcripts that were written directly under the
  * profile root (a legacy layout) into the structured per-cwd sessions tree:
@@ -99,7 +211,29 @@ export declare const foldCredentials: Upgrade;
  * is skip-on-clobber, so re-running never overwrites an already-relocated
  * transcript, and once no loose transcripts remain the step is a pure no-op.
  */
-export declare const reshelveTranscripts: Upgrade;
+export const reshelveTranscripts: Upgrade = {
+  id: "reshelve-loose-transcripts-into-sessions-dir",
+  describe: "Move loose session .jsonl files under the profile root into sessions/<cwd>/",
+  async apply(ws) {
+    let entries: string[];
+    try {
+      entries = await fs.readdir(ws.profileDir);
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (!entry.endsWith(".jsonl")) continue;
+      const loosePath = join(ws.profileDir, entry);
+      if (!(await isFile(loosePath))) continue;
+      const header = await readTranscriptHeader(loosePath);
+      if (header?.type !== "session") continue;
+      const projectDir = projectTranscriptDirName(header.cwd ?? ws.profileDir);
+      const destination = join(ws.sessionsDir, projectDir, basename(loosePath));
+      await relocateWithoutClobber(loosePath, destination);
+    }
+  },
+};
+
 /**
  * Relocate the managed native helper binaries (`fd`, `rg`, and their Windows
  * `.exe` forms) from the legacy `tools/` directory into the canonical managed
@@ -109,7 +243,20 @@ export declare const reshelveTranscripts: Upgrade;
  * state self-heals on the next run and an already-relocated layout (or a fresh
  * install with no legacy `tools/`) is a no-op.
  */
-export declare const relocateBinaries: Upgrade;
+export const relocateBinaries: Upgrade = {
+  id: "relocate-managed-helper-binaries-to-bin",
+  describe: "Move managed fd/rg helper binaries from the legacy tools/ dir into bin/",
+  async apply(ws) {
+    const legacyToolsDir = join(ws.profileDir, "tools");
+    if (!(await isDirectory(legacyToolsDir))) return;
+    for (const name of MANAGED_HELPER_BASENAMES) {
+      const from = join(legacyToolsDir, name);
+      if (!(await isFile(from))) continue;
+      await relocateWithoutClobber(from, join(ws.binDir, name));
+    }
+  },
+};
+
 /**
  * Rename the legacy command-template directory (`commands/`) to the current
  * prompt-template directory ({@link Workspace.promptsDir}).
@@ -119,10 +266,24 @@ export declare const relocateBinaries: Upgrade;
  * absent there is nothing to do. The rename is whole-directory and
  * non-destructive — a live `prompts/` is never replaced.
  */
-export declare const renamePromptDir: Upgrade;
+export const renamePromptDir: Upgrade = {
+  id: "rename-legacy-commands-dir-to-prompts",
+  describe: "Rename the legacy commands/ template directory to prompts/",
+  async apply(ws) {
+    const legacyPromptsDir = join(ws.profileDir, LEGACY_PROMPTS_DIRNAME);
+    if (!(await isDirectory(legacyPromptsDir))) return;
+    await relocateWithoutClobber(legacyPromptsDir, ws.promptsDir);
+  },
+};
+
 /**
  * The ordered list of upgrades. Apply order is array order; ids are the durable
  * marker keys. Append new steps to the end — never reorder or rename existing
  * ids, as that would re-run already-applied migrations.
  */
-export declare const UPGRADES: readonly Upgrade[];
+export const UPGRADES: readonly Upgrade[] = [
+  foldCredentials,
+  reshelveTranscripts,
+  relocateBinaries,
+  renamePromptDir,
+];

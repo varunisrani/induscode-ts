@@ -1,112 +1,334 @@
-// @ts-nocheck
-// Type declarations recovered from dist/types (no runtime body)
 /**
- * Banner — the "IndusCode Saffron" masthead the console renders above the
- * transcript.
- *
- * The startup chrome the surface mounts at the top of a session. Its loud
- * (default) mode has two presentations, switched by {@link BannerProps.started}:
- *
- *   - **Welcome card** (fresh session, no messages yet): a bordered card in the
- *     saffron brand look — a compact `● IndusCode v…` brand label, then two
- *     columns (left: a personalized greeting above a small block-art robot
- *     mascot and the bound model / working directory; right: a rotating "getting
- *     started" tip and the "What's new" notes). The mascot expression and the
- *     tip rotate per session (seeded once at mount and threaded in via
- *     {@link BannerProps.variantSeed}), so a new session looks a little different
- *     each time while staying deterministic for tests.
- *   - **Startup & Chat masthead** (once the user has sent a message): the
- *     `➜ dir git:(branch) indus` shell line, the block-letter "INDUS CODE"
- *     wordmark, the `indus console v…` brand line, the welcome line, and a
- *     bordered "Session" panel (model + cwd). The conversation itself is rendered
- *     below the banner by the surface's `MessageList`.
- *
- * It reads nothing but its props, holds no state, and runs no effects — purely
- * presentational Ink primitives themed through the framework
- * {@link InkThemeAdapter}. The {@link BannerProps.quiet} or
- * {@link BannerProps.compact} flags collapse all of that to a single compact
- * header line, still carrying the welcome line, the notices, and a condensed
- * changelog so nothing important is silently dropped.
+ * Banner — the "IndusCode Saffron" masthead the console renders above the transcript.
  */
-import { type InkThemeAdapter } from "indusagi/react-ink";
-import type { StartupChangelog, StartupMap, StartupNotice } from "../startup";
-/** What the {@link Banner} renders. */
-export interface BannerProps {
-    /** The framework adapter that turns token roles into terminal colours. */
-    readonly theme: InkThemeAdapter;
-    /** Canonical id of the model bound to the session. */
-    readonly modelId: string;
-    /** Working directory the session is scoped to. */
-    readonly workspace: string;
-    /** The product version shown on the brand line (e.g. the package VERSION). */
-    readonly version: string;
-    /**
-     * Whether the conversation has begun (the user has sent at least one message).
-     * When `false` the loud banner is the fresh-session welcome card; when `true`
-     * it becomes the Startup & Chat masthead (wordmark + Session panel) that sits
-     * above the transcript. Has no effect in {@link quiet}/{@link compact} modes.
-     */
-    readonly started?: boolean;
-    /** The active VCS branch (for the masthead shell line), or `null`/absent outside a repo. */
-    readonly branch?: string | null;
-    /** Whether to render the extra diagnostics line. */
-    readonly verbose?: boolean;
-    /**
-     * When set, the welcome card is suppressed in favour of a single compact
-     * header line. Wired from the verbose / quiet-startup flag.
-     */
-    readonly quiet?: boolean;
-    /**
-     * When set, the masthead auto-condenses to a single emblem + brand + model
-     * line (the repeat-launch presentation). Distinct from {@link quiet}, which is
-     * the manual suppression toggle; either collapses the banner, but `compact`
-     * keeps the small emblem and the welcome line.
-     */
-    readonly compact?: boolean;
-    /**
-     * The signed-in account label, used for the personalized "Welcome back,
-     * {name}!" line. Absent → the plain "Welcome back!" fallback is shown.
-     */
-    readonly name?: string;
-    /**
-     * Opt-in static colour-sweep flourish (legacy; accepted for call-site
-     * compatibility). The saffron welcome card paints from the theme roles and
-     * does not consume this flag.
-     */
-    readonly sweep?: boolean;
-    /**
-     * The per-session variation seed. Selects which mascot expression + "getting
-     * started" tip the card shows; the same seed always yields the same pair, so a
-     * test pins an exact variant. Absent → the first (seed 0) variant.
-     */
-    readonly variantSeed?: number;
-    /**
-     * Optional override for the "What's new" notes (e.g. sourced from a live
-     * changelog). Absent → the shipped {@link WHATS_NEW} copy.
-     */
-    readonly whatsNew?: readonly string[];
-    /**
-     * The gathered session resources (context docs, skills, prompts). Reserved:
-     * the saffron welcome card shows quick-action chips in place of the old
-     * "Startup Map" panel, so this is accepted for call-site compatibility (and to
-     * keep the gathering machinery wired) but not rendered in the card.
-     */
-    readonly startup?: StartupMap;
-    /** Out-of-band lines drawn above the card (errors, warnings, info). */
-    readonly notices?: readonly StartupNotice[];
-    /** The changelog survey rendered as a "What is new" block on a version bump. */
-    readonly changelog?: StartupChangelog;
+import { Fragment, jsx, jsxs } from "indusagi/react-host/jsx-runtime";
+import { Box, Text } from "indusagi/react-host/ink";
+import { ChangelogBlock } from "indusagi/react-ink";
+import { homedir } from "node:os";
+import { basename } from "node:path";
+import type { InkThemeAdapter } from "indusagi/react-ink";
+import type { StartupChangelog, StartupMap, StartupNotice } from "../startup.js";
+import { MASCOTS, WHATS_NEW, pickWelcomeVariant, mascotRows, type MascotFace } from "./welcome.js";
+import { welcomeLine } from "./banner-sweep.js";
+
+const BRAND = "IndusCode";
+const COMPACT_EMBLEM = "▛▜▙▟";
+
+const WORDMARK_ROWS: readonly string[] = [
+  "██╗███╗   ██╗██████╗ ██╗   ██╗███████╗     ██████╗ ██████╗ ██████╗ ███████╗",
+  "██║████╗  ██║██╔══██╗██║   ██║██╔════╝    ██╔════╝██╔═══██╗██╔══██╗██╔════╝",
+  "██║██╔██╗ ██║██║  ██║██║   ██║███████╗    ██║     ██║   ██║██║  ██║███████╗",
+  "██║██║╚██╗██║██║  ██║██║   ██║╚════██║    ██║     ██║   ██║██║  ██║╚════██║",
+  "██║██║ ╚████║██████╔╝╚██████╔╝███████║    ╚██████╗╚██████╔╝██████╔╝███████║",
+  "╚═╝╚═╝  ╚═══╝╚═════╝  ╚═════╝ ╚══════╝     ╚═════╝ ╚═════╝ ╚═════╝ ╚══════╝"
+];
+
+function StartupNotices({ theme, notices }: { theme: InkThemeAdapter; notices: readonly StartupNotice[] }) {
+  if (notices.length === 0) return null;
+  return jsx(Box, {
+    flexDirection: "column",
+    marginBottom: 1,
+    children: notices.map((notice, index) => jsx(Text, { children: paintNotice(theme, notice) }, index))
+  });
 }
-/**
- * Render the console masthead.
- *
- * In the default (loud) mode this is the saffron welcome card: a `● IndusCode
- * v…` brand label and a two-column body (greeting + mascot + model/cwd on the
- * left, a rotating tip + the "What's new" notes on the right). The
- * {@link BannerProps.quiet} or {@link BannerProps.compact} flags
- * collapse all of that to a single compact header line, still carrying the
- * welcome line, the notices, and a condensed changelog.
- *
- * @param props the brand/version context, session facts, and startup chrome
- */
-export declare function Banner({ theme, modelId, workspace, version, started, branch, quiet, compact, name, variantSeed, whatsNew, notices, changelog, }: BannerProps): JSX.Element;
+
+function paintNotice(theme: InkThemeAdapter, notice: StartupNotice) {
+  switch (notice.kind) {
+    case "error":
+      return theme.color("error", notice.text);
+    case "warning":
+      return theme.color("warning", notice.text);
+    case "info":
+    default:
+      return theme.muted(notice.text);
+  }
+}
+
+function StartupChangelogBlock({ theme, changelog }: { theme: InkThemeAdapter; changelog: StartupChangelog }) {
+  if (changelog.mode === "full" && changelog.markdown !== void 0) {
+    return jsx(ChangelogBlock, { markdown: changelog.markdown, theme, title: "What is new" });
+  }
+  if (changelog.mode === "condensed") {
+    return jsxs(Box, {
+      marginTop: 1,
+      children: [
+        jsx(Text, { children: theme.muted(`Updated to v${changelog.version}. Use `) }),
+        jsx(Text, { children: theme.color("accent", "/changelog") }),
+        jsx(Text, { children: theme.muted(" to view the full changelog.") })
+      ]
+    });
+  }
+  return null;
+}
+
+function WelcomeLine({ theme, name, tone = "accent" }: { theme: InkThemeAdapter; name?: string; tone?: "accent" | "muted" }) {
+  const paint = (text: string) => (tone === "muted" ? theme.muted(text) : theme.color("accent", text));
+  const line = welcomeLine(name);
+  if (name !== void 0 && line !== "Welcome back!") {
+    return jsxs(Box, {
+      children: [
+        jsx(Text, { children: paint("Welcome back, ") }),
+        jsx(Text, { bold: true, children: name.trim() }),
+        jsx(Text, { children: paint("!") })
+      ]
+    });
+  }
+  return jsx(Box, { children: jsx(Text, { children: paint(line) }) });
+}
+
+function ShellLine({ theme, workspace, branch }: { theme: InkThemeAdapter; workspace: string; branch?: string | null }) {
+  const dir = basename(workspace);
+  return jsxs(Box, {
+    children: [
+      jsx(Text, { children: theme.color("customMessage", "➜") }),
+      jsx(Text, { children: "  " }),
+      jsx(Text, { bold: true, children: theme.color("text", dir) }),
+      branch !== void 0 && branch !== null && branch.length > 0
+        ? jsxs(Fragment, {
+            children: [
+              jsx(Text, { children: " " }),
+              jsx(Text, { children: theme.color("accent", "git:(") }),
+              jsx(Text, { children: theme.color("customMessage", branch) }),
+              jsx(Text, { children: theme.color("accent", ")") })
+            ]
+          })
+        : null,
+      jsx(Text, { children: theme.dim("  indus") })
+    ]
+  });
+}
+
+function Wordmark({ theme }: { theme: InkThemeAdapter }) {
+  return jsx(Box, {
+    flexDirection: "column",
+    children: WORDMARK_ROWS.map((line, index) => jsx(Text, { children: theme.color("accent", line) }, index))
+  });
+}
+
+function SessionFact({ theme, label, value }: { theme: InkThemeAdapter; label: string; value: string }) {
+  return jsxs(Box, {
+    children: [
+      jsx(Text, { children: theme.dim(`${label.padEnd(7)} `) }),
+      jsx(Text, { children: theme.muted(value) })
+    ]
+  });
+}
+
+function paintMascot(theme: InkThemeAdapter, tone: string, text: string) {
+  switch (tone) {
+    case "head":
+      return theme.color("accent", text);
+    case "mouth":
+      return theme.color("customMessage", text);
+    case "eye":
+    case "feet":
+    default:
+      return theme.dim(text);
+  }
+}
+
+function Mascot({ theme, face }: { theme: InkThemeAdapter; face: MascotFace }) {
+  return jsx(Box, {
+    flexDirection: "column",
+    alignItems: "center",
+    marginY: 1,
+    children: mascotRows(face).map((row, rowIndex) =>
+      jsx(
+        Box,
+        {
+          children: row.map((seg, segIndex) =>
+            jsx(Text, { children: paintMascot(theme, seg.tone, seg.text) }, segIndex)
+          )
+        },
+        rowIndex
+      )
+    )
+  });
+}
+
+function shortenWorkspace(workspace: string): string {
+  const home = homedir();
+  if (home.length > 0 && workspace.startsWith(home)) {
+    return `~${workspace.slice(home.length)}`;
+  }
+  return workspace;
+}
+
+export interface BannerProps {
+  readonly theme: InkThemeAdapter;
+  readonly modelId: string;
+  readonly workspace: string;
+  readonly version: string;
+  readonly started?: boolean;
+  readonly branch?: string | null;
+  readonly verbose?: boolean;
+  readonly quiet?: boolean;
+  readonly compact?: boolean;
+  readonly name?: string;
+  readonly sweep?: boolean;
+  readonly variantSeed?: number;
+  readonly whatsNew?: readonly string[];
+  readonly startup?: StartupMap;
+  readonly notices?: readonly StartupNotice[];
+  readonly changelog?: StartupChangelog;
+}
+
+export function Banner(props: BannerProps) {
+  const {
+    theme,
+    modelId,
+    workspace,
+    version,
+    started,
+    branch,
+    quiet,
+    compact,
+    name,
+    variantSeed,
+    whatsNew,
+    notices,
+    changelog
+  } = props;
+  const noticeList = notices ?? [];
+  if (quiet || compact) {
+    return jsxs(Box, {
+      flexDirection: "column",
+      marginBottom: 1,
+      children: [
+        jsx(StartupNotices, { theme, notices: noticeList }),
+        jsxs(Box, {
+          children: [
+            compact
+              ? jsxs(Fragment, {
+                  children: [
+                    jsx(Text, { children: theme.color("accent", COMPACT_EMBLEM.slice(0, 2)) }),
+                    jsx(Text, { children: theme.color("customMessage", COMPACT_EMBLEM.slice(2)) }),
+                    jsx(Text, { children: "  " })
+                  ]
+                })
+              : null,
+            jsx(Text, { bold: true, children: theme.color("accent", BRAND) }),
+            jsx(Text, { children: "  " }),
+            jsx(Text, { children: theme.muted(`v${version}`) }),
+            jsx(Text, { children: "  " }),
+            jsx(Text, { children: theme.dim(modelId) })
+          ]
+        }),
+        jsx(WelcomeLine, { theme, name, tone: "muted" }),
+        changelog ? jsx(StartupChangelogBlock, { theme, changelog }) : null
+      ]
+    });
+  }
+  if (started) {
+    return jsxs(Box, {
+      flexDirection: "column",
+      marginBottom: 1,
+      children: [
+        jsx(StartupNotices, { theme, notices: noticeList }),
+        jsx(ShellLine, { theme, workspace, branch }),
+        jsx(Box, { marginTop: 1, children: jsx(Wordmark, { theme }) }),
+        jsxs(Box, {
+          marginTop: 1,
+          flexDirection: "column",
+          children: [
+            jsxs(Box, {
+              children: [
+                jsx(Text, { bold: true, children: theme.color("accent", "indus console") }),
+                jsx(Text, { children: "  " }),
+                jsx(Text, { children: theme.dim(`v${version}`) })
+              ]
+            }),
+            jsx(WelcomeLine, { theme, name, tone: "accent" })
+          ]
+        }),
+        jsxs(Box, {
+          flexDirection: "column",
+          borderStyle: "round",
+          borderColor: theme.colors["accent"],
+          paddingX: 1,
+          marginTop: 1,
+          children: [
+            jsx(Text, { bold: true, children: theme.color("accent", "Session") }),
+            jsx(SessionFact, { theme, label: "model", value: modelId }),
+            jsx(SessionFact, { theme, label: "cwd", value: shortenWorkspace(workspace) })
+          ]
+        }),
+        changelog ? jsx(StartupChangelogBlock, { theme, changelog }) : null
+      ]
+    });
+  }
+  const variant = pickWelcomeVariant(variantSeed ?? 0);
+  const greeting = welcomeLine(name);
+  const news = whatsNew && whatsNew.length > 0 ? whatsNew : WHATS_NEW;
+  const metaLine = modelId;
+  return jsxs(Box, {
+    flexDirection: "column",
+    marginBottom: 1,
+    children: [
+      jsx(StartupNotices, { theme, notices: noticeList }),
+      jsxs(Box, {
+        flexDirection: "column",
+        borderStyle: "round",
+        borderColor: theme.colors["accent"],
+        paddingX: 2,
+        paddingY: 1,
+        children: [
+          jsxs(Box, {
+            children: [
+              jsx(Text, { children: theme.color("customMessage", "● ") }),
+              jsx(Text, { bold: true, children: theme.color("accent", `${BRAND} `) }),
+              jsx(Text, { children: theme.dim(`v${version}`) })
+            ]
+          }),
+          jsxs(Box, {
+            marginTop: 1,
+            flexDirection: "row",
+            children: [
+              jsxs(Box, {
+                flexDirection: "column",
+                alignItems: "center",
+                width: 32,
+                flexShrink: 0,
+                marginRight: 2,
+                children: [
+                  jsx(Text, { bold: true, children: theme.color("text", greeting) }),
+                  jsx(Mascot, { theme, face: variant.mascot }),
+                  jsx(Text, { children: theme.dim(metaLine) }),
+                  jsx(Text, { children: theme.dim(shortenWorkspace(workspace)) })
+                ]
+              }),
+              jsxs(Box, {
+                flexDirection: "column",
+                flexGrow: 1,
+                borderStyle: "single",
+                borderColor: theme.colors["borderMuted"],
+                borderTop: false,
+                borderRight: false,
+                borderBottom: false,
+                paddingLeft: 2,
+                children: [
+                  jsx(Text, { bold: true, children: theme.color("accent", "Tips for getting started") }),
+                  jsx(Text, { children: theme.color("text", variant.tip) }),
+                  jsx(Box, { marginTop: 1, children: jsx(Text, { bold: true, children: theme.color("accent", "What's new") }) }),
+                  news.map((line, index) =>
+                    jsxs(Box, {
+                      flexDirection: "row",
+                      children: [
+                        jsx(Box, { width: 2, flexShrink: 0, children: jsx(Text, { children: theme.color("customMessage", "▸") }) }),
+                        jsx(Box, { flexGrow: 1, children: jsx(Text, { children: theme.color("text", line) }) })
+                      ]
+                    }, index)
+                  ),
+                  jsx(Box, { marginTop: 1, children: jsx(Text, { italic: true, children: theme.muted("/release-notes for more") }) })
+                ]
+              })
+            ]
+          })
+        ]
+      }),
+      changelog ? jsx(StartupChangelogBlock, { theme, changelog }) : null
+    ]
+  });
+}
+// Keep MASCOTS imported as a side-effect of this file even if not used directly
+void MASCOTS;

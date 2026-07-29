@@ -1,5 +1,3 @@
-// @ts-nocheck
-// Type declarations recovered from dist/types (no runtime body)
 /**
  * Heap headroom guard.
  *
@@ -23,6 +21,21 @@
  * guard silently falls back to running in the current, un-boosted process rather
  * than failing to start.
  */
+import { spawnSync } from "node:child_process";
+import { argv, env, execArgv, execPath, exit } from "node:process";
+
+function targetHeapMb(): number {
+  const raw = parseInt(env.INDUS_MAX_HEAP_MB ?? "", 10);
+  if (Number.isFinite(raw)) return Math.max(0, raw);
+  return 4096;
+}
+
+function alreadyRaised(): boolean {
+  return env.INDUS_HEAP_BOOSTED === "1" || (env.NODE_OPTIONS ?? "").includes("--max-old-space-size") || execArgv.some(
+    (a) => a.startsWith("--max-old-space-size") || a.startsWith("--max_old_space_size"),
+  );
+}
+
 /**
  * Ensure the process has heap headroom, re-execing once if it does not.
  *
@@ -30,4 +43,17 @@
  * raised, or the re-exec could not be spawned. Otherwise it does NOT return —
  * it runs the boosted child to completion and exits with the child's status.
  */
-export declare function ensureHeapHeadroom(): void;
+export function ensureHeapHeadroom(): void {
+  const mb = targetHeapMb();
+  if (mb === 0 || alreadyRaised()) return;
+  const entry = argv[1];
+  if (!entry) return;
+  const result = spawnSync(
+    execPath,
+    [`--max-old-space-size=${mb}`, ...execArgv, entry, ...argv.slice(2)],
+    { stdio: "inherit", env: { ...env, INDUS_HEAP_BOOSTED: "1" } },
+  );
+  if (result.error) return;
+  if (typeof result.status === "number") exit(result.status);
+  exit(result.signal ? 1 : 0);
+}

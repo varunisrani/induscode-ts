@@ -1,5 +1,3 @@
-// @ts-nocheck
-// Type declarations recovered from dist/types (no runtime body)
 /**
  * Console contract — the FROZEN type surface of the interactive terminal shell.
  *
@@ -48,10 +46,10 @@
  */
 import type { InkThemeAdapter, SessionSnapshot, StatusMessage, ToolExecutionState, UiDisplayBlock } from "indusagi/react-ink";
 import type { Dispatch, ReactNode, Reducer } from "react";
-import type { ConductorState, SessionConductor, SessionSignal } from "../conductor";
-import type { PreferenceStore } from "../settings";
-import type { SessionLibrary } from "../sessions";
-import type { AuthVault, LoginProvider, OAuthLoginResult } from "../launch";
+import type { ConductorState, SessionConductor, SessionSignal } from "../conductor.js";
+import type { PreferenceStore } from "../settings.js";
+import type { SessionLibrary } from "../sessions.js";
+import type { AuthVault, LoginProvider, OAuthLoginResult } from "../launch.js";
 import type { OAuthLoginCallbacks } from "indusagi/ai";
 /** Re-exported framework vocabulary that console consumers routinely need. */
 export type { SessionSnapshot, ToolExecutionState, StatusMessage, UiDisplayBlock, InkThemeAdapter, };
@@ -72,7 +70,7 @@ export type { SessionConductor, SessionSignal, ConductorState };
  */
 export type ThemeScheme = "saffron" | "midnight" | "daylight" | "midnight-cb" | "daylight-cb";
 /** The default scheme applied before any user preference is loaded. */
-export declare const DEFAULT_SCHEME: ThemeScheme;
+export const DEFAULT_SCHEME: ThemeScheme = "saffron";
 /**
  * Narrow an arbitrary string to a known {@link ThemeScheme}.
  *
@@ -81,7 +79,9 @@ export declare const DEFAULT_SCHEME: ThemeScheme;
  *
  * @param value any candidate string read from settings or a slash argument
  */
-export declare function isThemeScheme(value: string): value is ThemeScheme;
+export function isThemeScheme(value: string): value is ThemeScheme {
+  return value === "saffron" || value === "midnight" || value === "daylight" || value === "midnight-cb" || value === "daylight-cb";
+}
 /**
  * The semantic colour/style tokens the console renders in.
  *
@@ -265,7 +265,7 @@ export interface ModalState {
     readonly payload?: unknown;
 }
 /** The inert "no overlay" modal state. */
-export declare const NO_MODAL: ModalState;
+export const NO_MODAL: ModalState = { kind: "none" };
 /**
  * Compute the next {@link ModalState} for a requested transition.
  *
@@ -277,7 +277,10 @@ export declare const NO_MODAL: ModalState;
  * @param next    the modal kind to transition to
  * @param payload optional payload for the target overlay
  */
-export declare function transitionModal(next: ModalKind, payload?: unknown): ModalState;
+export function transitionModal(next: ModalKind, payload?: unknown): ModalState {
+  if (next === "none") return NO_MODAL;
+  return payload === void 0 ? { kind: next } : { kind: next, payload };
+}
 /**
  * The immutable state the entire terminal surface is reduced from.
  *
@@ -440,7 +443,21 @@ export type ConsoleDispatch = Dispatch<ConsoleEvent>;
  * deterministic and the store can be re-seeded without consulting any runtime.
  * Loaders overlay user preferences (scheme, toggles) on top of this base.
  */
-export declare const EMPTY_CONSOLE_STATE: ConsoleState;
+export const EMPTY_CONSOLE_STATE: ConsoleState = {
+  rows: [],
+  blocks: [],
+  buffer: "",
+  caret: 0,
+  history: [],
+  historyAt: null,
+  stash: "",
+  modal: NO_MODAL,
+  scheme: DEFAULT_SCHEME,
+  showReasoning: false,
+  showImages: true,
+  busy: false,
+  tick: 0
+};
 /**
  * The result a {@link SlashCommand.run} resolves to.
  *

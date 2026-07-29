@@ -21,5 +21,5 @@
  * `interceptor` helpers mint the contract's recorded shapes for hosts/tests that
  * assemble them outside the full surface builder.
  */
-export { AddonEventDispatcher, subscription } from "./event-dispatcher";
-export { AddonInterceptorChain, interceptor } from "./tool-interceptor";
+export { AddonEventDispatcher, subscription } from "./event-dispatcher.js";
+export { AddonInterceptorChain, interceptor } from "./tool-interceptor.js";

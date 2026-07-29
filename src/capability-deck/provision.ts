@@ -1,5 +1,3 @@
-// @ts-nocheck
-// Type declarations recovered from dist/types (no runtime body)
 /**
  * Deck provisioning — the single data-driven assembler.
  *
@@ -44,7 +42,48 @@
  * through the bridge ledger and concatenated by the host onto a deck's
  * {@link ToolDeck.tools}; provisioning only assembles the static catalog.
  */
-import type { CapabilityCard, DeckContext, DeckProfile, ToolDeck } from "./contract";
+import { APP_NOVEL_CARDS } from "./cards/index.js";
+import {
+    cardsForProfile,
+    hasCapability,
+} from "./manifest.js";
+import {
+    deckFault,
+    type CapabilityCard,
+    type DeckContext,
+    type DeckProfile,
+    type ToolDeck,
+} from "./contract.js";
+
+/**
+ * The policy that maps a {@link DeckProfile} to its catalog selection.
+ *
+ * `builtins` is the profile that names which built-in rows to keep (the catalog
+ * already encodes built-in membership); `appCards` flags whether to also append
+ * the app-novel cards (delegate, daemon, etc.) to the result.
+ */
+interface ProfilePolicy {
+    /** Built-in profile whose rows the policy keeps. */
+    readonly builtins: DeckProfile;
+    /** Whether to append the app-novel cards after the built-ins. */
+    readonly appCards: boolean;
+}
+
+/**
+ * The closed table mapping each {@link DeckProfile} to its selection policy.
+ *
+ * `authoring` keeps only the framework observe-only subset (no mutating built-ins,
+ * no app-novel cards). `survey` keeps every built-in but still skips app-novel
+ * cards. `all` keeps every built-in and appends every app-novel card. This is
+ * the single place the breadth ordering lives, so adding a profile is a one-line
+ * table edit.
+ */
+const PROFILE_TABLE: Readonly<Record<DeckProfile, ProfilePolicy>> = Object.freeze({
+    authoring: { builtins: "survey", appCards: false },
+    survey: { builtins: "all", appCards: false },
+    all: { builtins: "all", appCards: true },
+});
+
 /**
  * The catalog rows a profile selects, in catalog order: the built-in subset the
  * policy names, followed by the app-novel cards when the policy grants them.
@@ -54,7 +93,44 @@ import type { CapabilityCard, DeckContext, DeckProfile, ToolDeck } from "./contr
  *
  * @param profile the requested deck profile
  */
-export declare function cardsForDeckProfile(profile: DeckProfile): CapabilityCard[];
+export function cardsForDeckProfile(profile: DeckProfile): CapabilityCard[] {
+    const policy = PROFILE_TABLE[profile];
+    if (policy === undefined) {
+        throw deckFault(
+            "unknown_capability",
+            `No deck profile is registered under "${String(profile)}".`,
+        );
+    }
+    const builtins = cardsForProfile(policy.builtins);
+    return policy.appCards ? [...builtins, ...APP_NOVEL_CARDS] : builtins;
+}
+
+/**
+ * Build a fresh capability list from a slice of catalog rows.
+ *
+ * Each card's `build` is called once; any thrown error is wrapped in a typed
+ * {@link DeckFault} (`build_failed`) so consumers see a uniform failure shape.
+ *
+ * @param cards the catalog rows to instantiate
+ * @param ctx   the working context to bind each card to
+ */
+function buildSelected(cards: readonly CapabilityCard[], ctx: DeckContext) {
+    const built: ToolDeck["tools"] extends () => infer R ? R : never = [];
+    const out: ReturnType<ToolDeck["tools"]> = built;
+    for (const card of cards) {
+        try {
+            out.push(card.build(ctx));
+        } catch (cause) {
+            throw deckFault(
+                "build_failed",
+                `Capability "${String(card.id)}" failed to build.`,
+                cause,
+            );
+        }
+    }
+    return out;
+}
+
 /**
  * Provision a {@link ToolDeck} for a profile and working context.
  *
@@ -75,4 +151,19 @@ export declare function cardsForDeckProfile(profile: DeckProfile): CapabilityCar
  * @param profile the requested capability set (`authoring` | `survey` | `all`)
  * @param ctx     the working context (cwd + injectable backends) to bind cards to
  */
-export declare function provisionDeck(profile: DeckProfile, ctx: DeckContext): ToolDeck;
+export function provisionDeck(profile: DeckProfile, ctx: DeckContext): ToolDeck {
+    const selected = cardsForDeckProfile(profile);
+    const capabilities = buildSelected(selected, ctx);
+    return {
+        tools() {
+            return [...capabilities];
+        },
+        box() {
+            return [...capabilities];
+        },
+    };
+}
+
+// Touch `hasCapability` so the manifest's exported lookup remains reachable
+// through the public surface even when the provisioner does not need it.
+void hasCapability;

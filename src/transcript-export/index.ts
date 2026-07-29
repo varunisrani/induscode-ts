@@ -14,9 +14,32 @@
  * Consumers import the publish surface from `src/transcript-export` rather than
  * reaching into individual modules.
  */
-export { paintSgr, tokenizeSgr, foldSgr, SGR_CODE_TABLE } from "./sgr";
-export { DefaultThemeBridge, createThemeBridge, buildLuminanceLut, parseColor, formatColor, } from "./theme-bridge";
-export { PAGE_SHELL, PAGE_STYLES, CLIENT_SCRIPT, fill, type SlotValues, } from "./template";
-export { publishTranscript, type PublishEntry, type PublishMessage, type PublishRole, type MessagePart, } from "./publish";
-export { FALLBACK_EXPORT_THEME, SHELL_SLOTS, SGR_INITIAL_STATE, briefingFault, } from "../briefing/contract";
-export type { ExportTheme, ThemeBridge, ThemeMode, LuminanceLut, Rgb, SgrState, SgrToken, SgrMutation, PublishOptions, WidgetRender, TranscriptPart, ShellSlot, } from "../briefing/contract";
+export { paintSgr, tokenizeSgr, foldSgr, SGR_CODE_TABLE } from "./sgr.js";
+export {
+  DefaultThemeBridge,
+  createThemeBridge,
+  buildLuminanceLut,
+  parseColor,
+  formatColor,
+} from "./theme-bridge.js";
+export { PAGE_SHELL, PAGE_STYLES, CLIENT_SCRIPT, fill } from "./template.js";
+export {
+  publishTranscript,
+  type TranscriptEntry,
+  type TranscriptWidget,
+  type PublishOptions,
+} from "./publish.js";
+export {
+  FALLBACK_EXPORT_THEME,
+  SHELL_SLOTS,
+  SGR_INITIAL_STATE,
+  briefingFault,
+} from "../briefing/contract.js";
+export type {
+  ExportTheme,
+  ThemeMode,
+  LuminanceLut,
+  SgrState,
+  SgrToken,
+  SgrMutation,
+} from "../briefing/contract.js";

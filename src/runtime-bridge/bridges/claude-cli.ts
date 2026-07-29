@@ -1,39 +1,123 @@
-// @ts-nocheck
-// Type declarations recovered from dist/types (no runtime body)
 /**
  * `claude-cli` bridge — drives an Anthropic-flavoured CLI that emits
  * line-delimited stream-json content blocks.
- *
- * Wire dialect (each inbound {@link ChildMessage.payload} is one parsed JSON
- * line of the CLI's NDJSON stdout):
- *   - `{ type: "system", subtype: "init", session_id }` — the CLI announces the
- *     session id it allocated; surfaced as a `resume` event so the broker can
- *     persist it and reattach the same CLI session later.
- *   - `{ type: "content_block_start", content_block: { type } }` — a block opens;
- *     a `tool_use` block carries `{ id, name, input }` which becomes a fully
- *     formed tool call immediately (the CLI batches the input).
- *   - `{ type: "content_block_delta", delta: { type, text | thinking } }` — a
- *     `text_delta` / `thinking_delta` chunk; mapped to a `text` / `thinking`
- *     normalized event. `input_json_delta` chunks (streamed tool arguments) are
- *     ignored here because the bridge emits the tool call from the terminal
- *     `content_block_stop` snapshot.
- *   - `{ type: "message_delta", delta: { stop_reason } }` — carries the final
- *     stop reason, recorded for the eventual `finish`.
- *   - `{ type: "message_stop" }` / `{ type: "result" }` — the turn is over;
- *     finish with the recorded reason.
- *   - `{ type: "error", error: { message } }` — a runtime fault.
- *
- * The opening request is the user turn forwarded as the CLI's prompt body; the
- * spec's binary/args/env are the {@link RuntimeBroker}'s concern when it builds
- * the transport, so this bridge only formats the protocol body.
- *
- * The child process is reached exclusively through the injected
- * {@link ChildTransport}; no `claude` binary is spawned here.
  */
-import type { RuntimeBridge } from "../contract";
-/**
- * The `claude-cli` {@link RuntimeBridge}. Stateless on the contract surface: it
- * parses the injected transport's stream-json into the sink and returns the
- * framework push stream.
- */
-export declare const claudeCliBridge: RuntimeBridge;
+import type {
+  Context,
+  ExchangeOptions,
+  ExternalRuntimeSpec,
+  RuntimeAdapterId,
+  RuntimeBridge,
+  ToolCall,
+} from "../contract.js";
+import {
+  asRecord,
+  driveExchange,
+  strField,
+  type ChildParser,
+} from "./_drive.js";
+
+const ADAPTER: RuntimeAdapterId = "claude-cli";
+const CONTINUE = { status: "continue" } as const;
+const DONE = { status: "done" } as const;
+
+function mapStopReason(raw: string | undefined): "stop" | "length" | "toolUse" {
+  switch (raw) {
+    case "max_tokens":
+      return "length";
+    case "tool_use":
+      return "toolUse";
+    default:
+      return "stop";
+  }
+}
+
+function toolCallFromBlock(block: Record<string, unknown>): ToolCall | undefined {
+  const id = strField(block, "id");
+  const name = strField(block, "name");
+  if (id === undefined || name === undefined) return undefined;
+  const input = asRecord(block["input"]) ?? {};
+  return { type: "toolCall", id, name, arguments: input };
+}
+
+function makeParser(): ChildParser {
+  let stopReason: "stop" | "length" | "toolUse" = "stop";
+  return (message, sink) => {
+    const payload = asRecord(message.payload);
+    if (!payload) return CONTINUE;
+    const type = strField(payload, "type");
+    switch (type) {
+      case "system": {
+        if (strField(payload, "subtype") === "init") {
+          const sessionId = strField(payload, "session_id");
+          if (sessionId !== undefined) {
+            sink.emit({ kind: "resume", resumeToken: sessionId });
+          }
+        }
+        return CONTINUE;
+      }
+      case "content_block_start": {
+        const block = asRecord(payload["content_block"]);
+        if (block && strField(block, "type") === "tool_use") {
+          const call = toolCallFromBlock(block);
+          if (call) sink.toolCall(call);
+        }
+        return CONTINUE;
+      }
+      case "content_block_delta": {
+        const delta = asRecord(payload["delta"]);
+        if (!delta) return CONTINUE;
+        const deltaType = strField(delta, "type");
+        if (deltaType === "text_delta") {
+          const text = strField(delta, "text");
+          if (text !== undefined) sink.text(text);
+        } else if (deltaType === "thinking_delta") {
+          const thinking = strField(delta, "thinking");
+          if (thinking !== undefined) sink.thinking(thinking);
+        }
+        return CONTINUE;
+      }
+      case "message_delta": {
+        const delta = asRecord(payload["delta"]);
+        stopReason = mapStopReason(delta ? strField(delta, "stop_reason") : undefined);
+        return CONTINUE;
+      }
+      case "error": {
+        const error = asRecord(payload["error"]);
+        const detail =
+          (error && strField(error, "message")) ?? "claude-cli error";
+        sink.finishError({ message: detail, cause: payload["error"] });
+        return DONE;
+      }
+      case "message_stop":
+      case "result": {
+        sink.finishSuccess(stopReason);
+        return DONE;
+      }
+      default:
+        return CONTINUE;
+    }
+  };
+}
+
+function openingRequest(context: Context, opts: ExchangeOptions): { body: unknown } {
+  return {
+    body: {
+      type: "user",
+      context,
+      resume: opts.resume,
+      cwd: opts.cwd,
+      sessionId: opts.sessionId,
+    },
+  };
+}
+
+export const claudeCliBridge: RuntimeBridge = {
+  adapter: ADAPTER,
+  runExchange(model, context, opts, transport) {
+    return driveExchange(model, opts, transport, openingRequest(context, opts), makeParser());
+  },
+  requiresCredential(spec: ExternalRuntimeSpec): boolean {
+    return spec.authMode === "api-key";
+  },
+};

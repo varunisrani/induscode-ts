@@ -1,5 +1,3 @@
-// @ts-nocheck
-// Type declarations recovered from dist/types (no runtime body)
 /**
  * Runner: `oneshot` — single non-interactive request to stdout.
  *
@@ -9,7 +7,22 @@
  * via {@link runOneshot}, and resolves the channel exit code. The output shape is
  * NDJSON when the invocation carries a `json` flag, otherwise clean text.
  */
-import type { Runner } from "../contract";
+import { inertDialog, ndjsonFramer, runOneshot } from "../../channels/index.js";
+import type { Invocation, Runner } from "../contract.js";
+import { oneshotPrompts, buildSessionConductor } from "./session.js";
+
+const EXIT_NO_INPUT = 2;
+
+const STDOUT = {
+  write(chunk: string | Uint8Array, cb?: (err?: Error | null) => void) {
+    return process.stdout.write(chunk, cb);
+  },
+};
+
+function shapeOf(inv: Invocation): "ndjson" | "text" {
+  return inv.flags.json === true || inv.flags.json === "true" ? "ndjson" : "text";
+}
+
 /**
  * The one-shot runner.
  *
@@ -18,4 +31,28 @@ import type { Runner } from "../contract";
  * the run to {@link runOneshot} and returns its exit code. With no request text
  * it writes a short notice and exits non-zero rather than mounting an empty run.
  */
-export declare const oneshotRunner: Runner;
+export const oneshotRunner: Runner = {
+  id: "oneshot",
+  accepts(inv) {
+    return inv.mode === "oneshot";
+  },
+  async run(ctx) {
+    const prompts = oneshotPrompts(ctx);
+    if (prompts.length === 0) {
+      process.stderr.write("oneshot: no request text supplied\n");
+      return EXIT_NO_INPUT;
+    }
+    const conductor = await buildSessionConductor(ctx);
+    const channel = {
+      conductor,
+      out: STDOUT,
+      framer: ndjsonFramer,
+      dialog: inertDialog,
+    };
+    const request = {
+      shape: shapeOf(ctx.invocation),
+      prompts,
+    };
+    return runOneshot(channel, request);
+  },
+};

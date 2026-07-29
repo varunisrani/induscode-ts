@@ -17,9 +17,9 @@
  * Consumers import the invocation surface from `src/launch/invocation` rather
  * than reaching into the individual modules.
  */
-export { FLAG_SPECS, FLAG_GROUPS } from "./flags";
-export type { FlagGroup, GroupedFlagSpec } from "./flags";
-export { readInvocation, readFileReferences } from "./read";
-export { renderUsage } from "./usage";
-export { gatherAttachments, AttachmentError } from "./attachments";
-export type { AttachmentErrorKind } from "./attachments";
+export { FLAG_SPECS, FLAG_GROUPS } from "./flags.js";
+export type { FlagGroup, GroupedFlagSpec } from "./flags.js";
+export { readInvocation, readFileReferences } from "./read.js";
+export { renderUsage } from "./usage.js";
+export { gatherAttachments, AttachmentError } from "./attachments.js";
+export type { AttachmentErrorKind } from "./attachments.js";

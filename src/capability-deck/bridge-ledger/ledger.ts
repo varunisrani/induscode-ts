@@ -24,7 +24,7 @@
  * both live on the value, callers read `ledger.snapshot.live` directly and never
  * re-reduce by hand.
  */
-import { type AnyCapability, type BridgeEntry, type BridgeKey, type LedgerSnapshot } from "../contract";
+import { type AnyCapability, type BridgeEntry, type BridgeKey, type LedgerSnapshot } from "../contract.js";
 /**
  * An immutable, event-sourced view of MCP tool enrollment.
  *

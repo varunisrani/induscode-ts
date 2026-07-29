@@ -20,12 +20,32 @@
  * stdlib clones) are intentionally omitted: they had zero consumers, so they
  * are not rebuilt here.
  */
-export type { ToolDescriptor, ReleaseAsset, ReleaseInfo, ReleaseLookup, DownloadRequest, ProvisionPlan, } from "./tool-fetch";
-export { KIT_USER_AGENT, resolveManagedBinaryPath, pickReleaseAsset, buildDownloadRequest, planProvision, } from "./tool-fetch";
-export type { ImageFormat, ImageMediaType, ByteSource, AssetNameContext, } from "./image";
-export { IMAGE_SNIFF_BYTES, sniffImageFormat, mediaTypeForImageFormat, detectImageMediaType, isSupportedImage, resolveAssetName, } from "./image";
-export { quoteArg, needsQuoting, buildShellCommand, } from "./shell";
-export type { ClipboardImageOptions, } from "./clipboard-image";
-export { readClipboardImage, } from "./clipboard-image";
-export type { ExternalEditorOptions, } from "./external-editor";
-export { openInExternalEditor, } from "./external-editor";
+export type {
+  ToolDescriptor,
+  ReleaseAsset,
+  ReleaseInfo,
+  ReleaseLookup,
+  DownloadRequest,
+  ProvisionPlan,
+} from "./tool-fetch.js";
+export {
+  KIT_USER_AGENT,
+  resolveManagedBinaryPath,
+  pickReleaseAsset,
+  buildDownloadRequest,
+  planProvision,
+} from "./tool-fetch.js";
+export type { ImageFormat, ImageMediaType, ByteSource, AssetNameContext } from "./image.js";
+export {
+  IMAGE_SNIFF_BYTES,
+  sniffImageFormat,
+  mediaTypeForImageFormat,
+  detectImageMediaType,
+  isSupportedImage,
+  resolveAssetName,
+} from "./image.js";
+export { quoteArg, needsQuoting, buildShellCommand } from "./shell.js";
+export type { ClipboardImageOptions } from "./clipboard-image.js";
+export { readClipboardImage } from "./clipboard-image.js";
+export type { ExternalEditorOptions } from "./external-editor.js";
+export { openInExternalEditor } from "./external-editor.js";

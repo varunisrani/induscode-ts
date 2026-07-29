@@ -29,10 +29,10 @@
  * Failure isolation comes for free from the fleet: a server that faulted on
  * connect contributes no descriptors and is simply absent from the enrollment.
  */
-import { type AnyCapability, type CapabilityCard, type DeckFault } from "../contract";
+import { type AnyCapability, type CapabilityCard, type DeckFault } from "../contract.js";
 import { type BridgeConfig, type ServerConfig, type ServerFleet, type FleetStatus } from "indusagi/interop";
 import type { ToolBox } from "indusagi/runtime";
-import { type BridgeLedger } from "./ledger";
+import { type BridgeLedger } from "./ledger.js";
 /**
  * Adapt every tool a mounted {@link ToolBox} advertises into a list of
  * {@link Capability} objects the conductor and ledger consume.

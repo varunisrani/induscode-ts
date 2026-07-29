@@ -1,57 +1,308 @@
-// @ts-nocheck
-// Type declarations recovered from dist/types (no runtime body)
 /**
- * Saffron picker boards — the themed `/settings` and `/model` overlays styled to
- * the "IndusCode Saffron · Settings · Config" design.
- *
- * The framework ships plain (un-themed) `SettingsDialog` / `ModelDialog`. These
- * boards are the console's own theme-aware replacements for those two pickers: a
- * saffron tab-pill header, a teal-bordered search box with a magnifier and a
- * block caret, a two-column list whose values are tinted by kind (on/true →
- * green, off/false → dim, everything else → teal), a windowed "↓ N more" hint,
- * and a top-ruled footer of key hints. They reuse the framework's pure
- * {@link matchesSearchQuery} / {@link wrapSelectionIndex} helpers (and the
- * {@link SettingsDialogItem} shape) so only the *presentation* is re-authored,
- * not the filter/navigation logic.
- *
- * All colour comes through the framework {@link InkThemeAdapter} the overlay
- * group already holds, so the boards recolour with the active scheme; the one
- * raw-hex touch is the chalk tab-pill (dark text on the accent fill), which has
- * no theme role to resolve against.
+ * Saffron picker boards — the themed `/settings` and `/model` overlays.
  */
-import { type InkThemeAdapter, type SettingsDialogItem } from "indusagi/react-ink";
-import type { Model } from "indusagi/ai";
-/** What the {@link SettingsBoard} renders. */
+import chalk from "chalk";
+import { readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
+import { useEffect, useMemo, useState } from "indusagi/react-host";
+import { Box, Text, useInput } from "indusagi/react-host/ink";
+import {
+  matchesSearchQuery,
+  wrapSelectionIndex,
+  type InkThemeAdapter,
+  type SettingsDialogItem,
+  type Model
+} from "indusagi/react-ink";
+import { Fragment, jsx, jsxs } from "indusagi/react-host/jsx-runtime";
+import { isGatewayEligibleProvider } from "../../boot/runners/server-mode.js";
+
+function readServerTierInfo() {
+  let signedIn = false;
+  try {
+    const file = join(homedir(), ".indusagi", "agent", "server-token.json");
+    const token = JSON.parse(readFileSync(file, "utf8"));
+    signedIn = typeof token.expires_at === "string" && new Date(token.expires_at).getTime() - Date.now() > 5 * 60 * 1e3;
+  } catch {
+    signedIn = false;
+  }
+  const localKeys = new Set<string>();
+  try {
+    const file = join(homedir(), ".indusagi", "agent", "auth.json");
+    const vault = JSON.parse(readFileSync(file, "utf8"));
+    for (const [provider, entry] of Object.entries(vault)) {
+      if (entry !== null && typeof entry === "object" && Object.keys(entry).length > 0) {
+        localKeys.add(provider);
+      }
+    }
+  } catch {
+    // ignore
+  }
+  return { signedIn, localKeys };
+}
+
+function truncate(text: string, width: number): string {
+  if (text.length <= width) return text;
+  if (width <= 1) return text.slice(0, width);
+  return `${text.slice(0, width - 1)}…`;
+}
+
+function tabPill(theme: InkThemeAdapter, text: string): string {
+  const accent = theme.colors["accent"] ?? "#f7a23f";
+  try {
+    return chalk.bgHex(accent).hex("#1a120a").bold(` ${text} `);
+  } catch {
+    return theme.color("accent", text);
+  }
+}
+
+function paintValue(theme: InkThemeAdapter, value: string): string {
+  const v = value.trim().toLowerCase();
+  if (v === "on" || v === "true" || v === "yes" || v === "enabled") {
+    return theme.color("success", value);
+  }
+  if (v === "off" || v === "false" || v === "no" || v === "disabled") {
+    return theme.dim(value);
+  }
+  return theme.color("customMessage", value);
+}
+
+function visibleRowBudget(): number {
+  return Math.max(6, (process.stdout.rows ?? 24) - 18);
+}
+
+function windowAround(total: number, selectedIndex: number) {
+  const budget = visibleRowBudget();
+  const start = Math.max(0, Math.min(selectedIndex - Math.floor(budget / 2), Math.max(0, total - budget)));
+  const below = Math.max(0, total - (start + budget));
+  return { start, budget, below };
+}
+
+function SearchBox({ theme, query, placeholder }: { theme: InkThemeAdapter; query: string; placeholder: string }) {
+  return jsxs(Box, {
+    borderStyle: "round",
+    borderColor: theme.colors["customMessage"],
+    paddingX: 1,
+    marginBottom: 1,
+    children: [
+      jsx(Text, { children: theme.color("customMessage", "⌕  ") }),
+      query.length > 0
+        ? jsxs(Fragment, {
+            children: [
+              jsx(Text, { children: theme.color("text", query) }),
+              jsx(Text, { inverse: true, children: " " })
+            ]
+          })
+        : jsxs(Fragment, {
+            children: [
+              jsx(Text, { inverse: true, children: " " }),
+              jsx(Text, { children: theme.dim(` ${placeholder}`) })
+            ]
+          })
+    ]
+  });
+}
+
+function BoardFooter({ theme, hint, detail }: { theme: InkThemeAdapter; hint: string; detail?: string }) {
+  return jsxs(Box, {
+    flexDirection: "column",
+    marginTop: 1,
+    children: [
+      detail ? jsx(Box, { marginBottom: 1, children: jsx(Text, { children: theme.muted(detail) }) }) : null,
+      jsx(Box, {
+        borderStyle: "single",
+        borderColor: theme.colors["borderMuted"],
+        borderTop: true,
+        borderBottom: false,
+        borderLeft: false,
+        borderRight: false,
+        paddingTop: 0,
+        children: jsx(Text, { children: theme.dim(hint) })
+      })
+    ]
+  });
+}
+
+function BoardShell({ theme, title, query, placeholder, below, hint, detail, children }: any) {
+  return jsxs(Box, {
+    flexDirection: "column",
+    borderStyle: "round",
+    borderColor: theme.colors["accent"],
+    paddingX: 1,
+    marginTop: 1,
+    children: [
+      jsx(Box, { marginBottom: 1, children: jsx(Text, { children: tabPill(theme, title) }) }),
+      jsx(SearchBox, { theme, query, placeholder }),
+      children,
+      below > 0 ? jsx(Box, { marginTop: 0, children: jsx(Text, { children: theme.dim(`↓ ${below} more below`) }) }) : null,
+      jsx(BoardFooter, { theme, hint, detail })
+    ]
+  });
+}
+
+const SETTINGS_LABEL_WIDTH = 34;
+
+function nextValue(values: readonly string[], current: string | undefined, direction: number): string | undefined {
+  if (values.length === 0) return void 0;
+  const at = Math.max(0, values.indexOf(current as string));
+  return values[(at + direction + values.length) % values.length];
+}
+
 export interface SettingsBoardProps {
-    /** The framework adapter that turns token roles into terminal colours. */
-    readonly theme: InkThemeAdapter;
-    /** The settings rows to present and cycle. */
-    readonly items: readonly SettingsDialogItem[];
-    /** Invoked when the board is dismissed. */
-    readonly onClose: () => void;
+  readonly theme: InkThemeAdapter;
+  readonly items: readonly SettingsDialogItem[];
+  readonly onClose: () => void;
 }
-/**
- * The saffron `/settings` board: a filterable, value-cycling settings list in the
- * design's look. Up/Down move (wrapping), Left/Right or Enter cycle the value,
- * typing filters, Ctrl+U clears, Esc closes.
- */
-export declare function SettingsBoard({ theme, items, onClose }: SettingsBoardProps): JSX.Element;
-/** What the {@link ModelBoard} renders. */
+
+export function SettingsBoard({ theme, items, onClose }: SettingsBoardProps) {
+  const [query, setQuery] = useState("");
+  const [selectedIndex, setSelectedIndex] = useState(0);
+  const filtered = useMemo(
+    () =>
+      items.filter((item) =>
+        matchesSearchQuery(`${item.label} ${item.description} ${item.value} ${item.values.join(" ")}`, query)
+      ),
+    [items, query]
+  );
+  useEffect(() => setSelectedIndex(0), [query]);
+  useEffect(() => {
+    if (selectedIndex >= filtered.length) setSelectedIndex(0);
+  }, [filtered.length, selectedIndex]);
+  const cycle = (direction: number) => {
+    const item = filtered[selectedIndex];
+    if (!item) return;
+    const value = nextValue(item.values, item.value, direction);
+    if (value && value !== item.value) void item.onChange(value);
+  };
+  useInput((input, key) => {
+    if (key.escape) return onClose();
+    if (key.upArrow) return setSelectedIndex((c) => wrapSelectionIndex(c, -1, filtered.length));
+    if (key.downArrow) return setSelectedIndex((c) => wrapSelectionIndex(c, 1, filtered.length));
+    if (key.backspace || key.delete) return setQuery((c) => c.slice(0, -1));
+    if (key.ctrl && input === "u") return setQuery("");
+    if (key.leftArrow) return cycle(-1);
+    if (key.rightArrow || key.return) return cycle(1);
+    if (!key.ctrl && !key.meta && input) setQuery((c) => c + input);
+  });
+  const { start, budget, below } = windowAround(filtered.length, selectedIndex);
+  const visible = filtered.slice(start, start + budget);
+  const selected = filtered[selectedIndex];
+  const detail = selected ? `${selected.description}  ·  ${selected.values.join(" / ")}` : void 0;
+  const list =
+    items.length === 0
+      ? jsx(Text, { children: theme.muted("No settings are available.") })
+      : filtered.length === 0
+      ? jsx(Text, { children: theme.muted("No settings matched the search.") })
+      : jsx(Box, {
+          flexDirection: "column",
+          children: visible.map((item, index) => {
+            const isSelected = start + index === selectedIndex;
+            const labelText = truncate(item.label, SETTINGS_LABEL_WIDTH - 1).padEnd(SETTINGS_LABEL_WIDTH);
+            return jsxs(
+              Box,
+              {
+                children: [
+                  jsx(Box, { width: 2, children: jsx(Text, { children: isSelected ? theme.color("accent", "›") : " " }) }),
+                  jsx(Box, {
+                    width: SETTINGS_LABEL_WIDTH,
+                    children: jsx(Text, { bold: isSelected, children: theme.color("text", labelText) })
+                  }),
+                  jsx(Text, { children: paintValue(theme, item.value) })
+                ]
+              },
+              item.id
+            );
+          })
+        });
+  return jsx(BoardShell, {
+    theme,
+    title: "Settings",
+    query,
+    placeholder: "Search settings…",
+    below,
+    hint: "Type to filter  ·  ↑/↓ select  ·  ←/→ or ↵ change  ·  Ctrl+U clear  ·  Esc close",
+    detail,
+    children: list
+  });
+}
+
+function modelMatches(model: Model<any>, query: string) {
+  return matchesSearchQuery(`${model.provider} ${model.id} ${model.name ?? ""}`, query);
+}
+
 export interface ModelBoardProps {
-    /** The framework adapter that turns token roles into terminal colours. */
-    readonly theme: InkThemeAdapter;
-    /** The selectable models. */
-    readonly models: readonly Model<any>[];
-    /** Optional initial search query. */
-    readonly search?: string;
-    /** Invoked with the chosen model. */
-    readonly onSelect: (model: Model<any>) => void | Promise<void>;
-    /** Invoked when the board is dismissed. */
-    readonly onClose: () => void;
+  readonly theme: InkThemeAdapter;
+  readonly models: readonly Model<any>[];
+  readonly onClose: () => void;
+  readonly onSelect: (model: Model<any>) => void | Promise<void>;
+  readonly search?: string;
 }
-/**
- * The saffron `/model` board: a filterable model list in the design's look.
- * Up/Down move (wrapping), Enter selects, typing filters, Ctrl+U clears, Esc
- * closes.
- */
-export declare function ModelBoard({ theme, models, onClose, onSelect, search }: ModelBoardProps): JSX.Element;
+
+export function ModelBoard({ theme, models, onClose, onSelect, search }: ModelBoardProps) {
+  const [query, setQuery] = useState(search ?? "");
+  const [selectedIndex, setSelectedIndex] = useState(0);
+  useEffect(() => setQuery(search ?? ""), [search]);
+  const serverTier = useMemo(readServerTierInfo, []);
+  const isServerTier = (provider: string) =>
+    serverTier.signedIn && isGatewayEligibleProvider(provider) && !serverTier.localKeys.has(provider);
+  const available = useMemo(
+    () => models.filter((model) => serverTier.localKeys.has(model.provider) || isServerTier(model.provider)),
+    [models, serverTier]
+  );
+  const filtered = useMemo(() => available.filter((model) => modelMatches(model, query)), [available, query]);
+  useEffect(() => setSelectedIndex(0), [query]);
+  useEffect(() => {
+    if (selectedIndex >= filtered.length) setSelectedIndex(0);
+  }, [filtered.length, selectedIndex]);
+  useInput((input, key) => {
+    if (key.escape) return onClose();
+    if (key.upArrow) return setSelectedIndex((c) => wrapSelectionIndex(c, -1, filtered.length));
+    if (key.downArrow) return setSelectedIndex((c) => wrapSelectionIndex(c, 1, filtered.length));
+    if (key.backspace || key.delete) return setQuery((c) => c.slice(0, -1));
+    if (key.ctrl && input === "u") return setQuery("");
+    if (key.return) {
+      const model = filtered[selectedIndex];
+      if (model) void onSelect(model);
+      return;
+    }
+    if (!key.ctrl && !key.meta && input) setQuery((c) => c + input);
+  });
+  const { start, budget, below } = windowAround(filtered.length, selectedIndex);
+  const visible = filtered.slice(start, start + budget);
+  const list =
+    filtered.length === 0
+      ? jsx(Text, {
+          children: theme.muted(
+            available.length === 0
+              ? "No models available — sign in with a provider key or run /login to use the server tier."
+              : "No models matched the search."
+          )
+        })
+      : jsx(Box, {
+          flexDirection: "column",
+          children: visible.map((model, index) => {
+            const isSelected = start + index === selectedIndex;
+            return jsxs(
+              Box,
+              {
+                children: [
+                  jsx(Box, { width: 2, children: jsx(Text, { children: isSelected ? theme.color("accent", "›") : " " }) }),
+                  jsx(Text, { bold: isSelected, children: theme.color("text", model.id) }),
+                  model.name ? jsx(Text, { children: theme.dim(`  ${model.name}`) }) : null,
+                  isServerTier(model.provider) ? jsx(Text, { children: theme.color("accent", "  ⫡ server") }) : null
+                ]
+              },
+              model.id
+            );
+          })
+        });
+  return jsx(BoardShell, {
+    theme,
+    title: "Models",
+    query,
+    placeholder: "Search models by provider, id, or name…",
+    below,
+    hint: "Type to filter  ·  ↑/↓ select  ·  ↵ choose  ·  Ctrl+U clear  ·  Esc close",
+    children: list
+  });
+}

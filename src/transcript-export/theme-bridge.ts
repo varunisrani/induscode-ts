@@ -1,101 +1,150 @@
-// @ts-nocheck
-// Type declarations recovered from dist/types (no runtime body)
 /**
  * ThemeBridge — the color service behind the HTML transcript export.
- *
- * Everything the publisher needs to turn an {@link ExportTheme} token bag into
- * concrete page colors lives here: parsing CSS colors into {@link Rgb}, measuring
- * a color's WCAG relative luminance through a precomputed lookup table, deciding
- * whether the theme reads {@link ThemeMode} light or dark, deriving lighter/darker
- * surface variants from a base, and projecting the whole theme to the CSS custom
- * properties the page shell consumes.
- *
- * Two facts are interface-dictated and kept faithful:
- *   - The WCAG relative-luminance formula — linearize each sRGB channel with the
- *     gamma piecewise curve, then weight `0.2126 R + 0.7152 G + 0.0722 B`. The
- *     per-channel linearization is precomputed once into {@link buildLuminanceLut}
- *     (a {@link LuminanceLut}) so a luminance read is three table lookups plus a
- *     weighted sum, never a `pow` per pixel.
- *   - Readable foreground selection — given a background, pick the foreground
- *     (from the theme's own ink choices) whose contrast against that background is
- *     the larger, so text on any derived surface stays legible.
- *
- * Every default color the bridge falls back to is this rebuild's own
- * {@link FALLBACK_EXPORT_THEME} (a deep-slate palette), never a legacy export's
- * magic constant.
  */
-import { type ExportTheme, type LuminanceLut, type Rgb, type ThemeBridge, type ThemeMode } from "../briefing/contract";
-/**
- * Build the 256-entry sRGB→linear lookup table the WCAG relative-luminance
- * formula needs for each channel.
- *
- * For a channel value `v` in `0–255`, normalize to `s = v / 255`, then apply the
- * standard gamma-expansion: `s ≤ 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ^
- * 2.4`. The table holds the linearized value at each integer channel so a
- * luminance read avoids the per-call `pow`. The math is the published standard's;
- * the table is this module's.
- */
-export declare function buildLuminanceLut(): Float64Array;
-/**
- * Parse a CSS color string into its {@link Rgb} channels. Recognizes `#rgb`,
- * `#rrggbb` (and their alpha-bearing `#rgba` / `#rrggbbaa` forms, alpha dropped)
- * and the functional `rgb(r, g, b)` / `rgba(r, g, b, a)` notations. Any
- * unrecognized input resolves to `null`, which the bridge treats as "fall back to
- * the theme default" rather than throwing.
- *
- * @param color a CSS color string
- */
-export declare function parseColor(color: string): Rgb | null;
-/** Render an {@link Rgb} back to a `#rrggbb` CSS string. */
-export declare function formatColor(rgb: Rgb): string;
-/**
- * The concrete {@link ThemeBridge}. Holds a resolved {@link ExportTheme} and a
- * {@link LuminanceLut}, and serves every color query the publisher makes against
- * them. Pure with respect to its inputs — construction resolves the theme once and
- * the methods only read.
- */
-export declare class DefaultThemeBridge implements ThemeBridge {
-    readonly theme: ExportTheme;
-    private readonly lut;
-    /**
-     * @param theme an {@link ExportTheme} to serve; defaults to the rebuild's own
-     *   {@link FALLBACK_EXPORT_THEME}.
-     * @param lut   the luminance lookup table to read; defaults to the shared
-     *   module-level table.
-     */
-    constructor(theme?: ExportTheme, lut?: LuminanceLut);
-    /** The WCAG relative luminance (0–1) of a CSS color; unparseable input reads 0. */
-    luminance(color: string): number;
-    /** Whether the theme's page surface reads light or dark. */
-    mode(): ThemeMode;
-    /**
-     * Derive a surface variant from a base color. The `amount` is a signed lightness
-     * delta in channel space; the sign is honored directly so a caller can lighten
-     * (`+`) or darken (`−`) explicitly. When `amount` is `0` the base is returned
-     * formatted but unchanged. Unparseable bases fall through to the theme's card
-     * surface so a derivation never yields an empty string.
-     *
-     * @param base   the base CSS color to adjust
-     * @param amount signed lightness delta (positive lightens, negative darkens)
-     */
-    deriveSurface(base: string, amount: number): string;
-    /**
-     * Pick the more readable of the theme's two ink colors for a given background by
-     * comparing each ink's WCAG contrast against it and returning the higher. This
-     * is the bridge's own readable-foreground chooser — used when text sits on a
-     * derived surface whose lightness is not known ahead of time.
-     *
-     * @param background the surface the text will sit on
-     */
-    readableInk(background: string): string;
-    /** Project the theme to its CSS custom properties, keyed by token name. */
-    toCssVars(): Readonly<Record<string, string>>;
+import { FALLBACK_EXPORT_THEME, type ExportTheme } from "../briefing/contract.js";
+
+export function buildLuminanceLut(): Float64Array {
+  const lut = new Float64Array(256);
+  for (let v = 0; v < 256; v++) {
+    const s = v / 255;
+    lut[v] = s <= 0.03928 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4);
+  }
+  return lut;
 }
-/**
- * Build a {@link ThemeBridge} over an optional {@link ExportTheme}. The convenience
- * factory the publisher calls; omitting the theme yields a bridge over the
- * rebuild's own fallback palette.
- *
- * @param theme an export palette to serve, or undefined for the fallback
- */
-export declare function createThemeBridge(theme?: ExportTheme): ThemeBridge;
+
+interface Rgb {
+  r: number;
+  g: number;
+  b: number;
+}
+
+function expandShortHex(body: string): string {
+  if (body.length === 3 || body.length === 4) {
+    return body
+      .slice(0, 3)
+      .split("")
+      .map((c) => c + c)
+      .join("");
+  }
+  return body.slice(0, 6);
+}
+
+function parseColor(color: string): Rgb | null {
+  const text = color.trim().toLowerCase();
+  if (text.startsWith("#")) {
+    const body = expandShortHex(text.slice(1));
+    if (!/^[0-9a-f]{6}$/.test(body)) return null;
+    return {
+      r: parseInt(body.slice(0, 2), 16),
+      g: parseInt(body.slice(2, 4), 16),
+      b: parseInt(body.slice(4, 6), 16),
+    };
+  }
+  const fn = text.match(/^rgba?\(([^)]+)\)$/);
+  if (fn) {
+    const parts = fn[1].split(/[,\s/]+/).filter((p) => p.length > 0);
+    if (parts.length < 3) return null;
+    const channel = (p: string): number => {
+      const n = p.endsWith("%") ? (parseFloat(p) / 100) * 255 : parseFloat(p);
+      return Number.isNaN(n) ? 0 : clampByte2(n);
+    };
+    return { r: channel(parts[0]), g: channel(parts[1]), b: channel(parts[2]) };
+  }
+  return null;
+}
+
+function clampByte2(value: number): number {
+  if (value <= 0) return 0;
+  if (value >= 255) return 255;
+  return Math.round(value);
+}
+
+function formatColor(rgb: Rgb): string {
+  const hex = (v: number): string => clampByte2(v).toString(16).padStart(2, "0");
+  return `#${hex(rgb.r)}${hex(rgb.g)}${hex(rgb.b)}`;
+}
+
+function luminanceOf(rgb: Rgb, lut: Float64Array): number {
+  const lr = lut[clampByte2(rgb.r)] ?? 0;
+  const lg = lut[clampByte2(rgb.g)] ?? 0;
+  const lb = lut[clampByte2(rgb.b)] ?? 0;
+  return 0.2126 * lr + 0.7152 * lg + 0.0722 * lb;
+}
+
+function contrastRatio(a: number, b: number): number {
+  const hi = Math.max(a, b);
+  const lo = Math.min(a, b);
+  return (hi + 0.05) / (lo + 0.05);
+}
+
+function stepChannels(rgb: Rgb, amount: number): Rgb {
+  return {
+    r: clampByte2(rgb.r + amount),
+    g: clampByte2(rgb.g + amount),
+    b: clampByte2(rgb.b + amount),
+  };
+}
+
+const LUMINANCE_LUT: Float64Array = buildLuminanceLut();
+const MODE_THRESHOLD = 0.18;
+const THEME_TOKENS = [
+  "pageSurface",
+  "cardSurface",
+  "noteSurface",
+  "ink",
+  "inkMuted",
+  "accent",
+  "border",
+  "userRole",
+  "agentRole",
+  "toolRole",
+] as const;
+
+export class DefaultThemeBridge {
+  readonly theme: ExportTheme;
+  readonly lut: Float64Array;
+
+  constructor(
+    theme: ExportTheme = FALLBACK_EXPORT_THEME,
+    lut: Float64Array = LUMINANCE_LUT,
+  ) {
+    this.theme = theme;
+    this.lut = lut;
+  }
+
+  luminance(color: string): number {
+    const rgb = parseColor(color);
+    return rgb === null ? 0 : luminanceOf(rgb, this.lut);
+  }
+
+  mode(): "light" | "dark" {
+    return this.luminance(this.theme.pageSurface) >= MODE_THRESHOLD ? "light" : "dark";
+  }
+
+  deriveSurface(base: string, amount: number): string {
+    const rgb = parseColor(base);
+    if (rgb === null) return this.theme.cardSurface;
+    return formatColor(stepChannels(rgb, amount));
+  }
+
+  readableInk(background: string): string {
+    const bg = this.luminance(background);
+    const ink = this.luminance(this.theme.ink);
+    const muted = this.luminance(this.theme.inkMuted);
+    return contrastRatio(ink, bg) >= contrastRatio(muted, bg)
+      ? this.theme.ink
+      : this.theme.inkMuted;
+  }
+
+  toCssVars(): Record<string, string> {
+    const vars: Record<string, string> = {};
+    for (const token of THEME_TOKENS) {
+      vars[token] = this.theme[token];
+    }
+    return vars;
+  }
+}
+
+export function createThemeBridge(theme?: ExportTheme): DefaultThemeBridge {
+  return new DefaultThemeBridge(theme ?? FALLBACK_EXPORT_THEME);
+}

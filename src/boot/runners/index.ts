@@ -1,5 +1,3 @@
-// @ts-nocheck
-// Type declarations recovered from dist/types (no runtime body)
 /**
  * Runners subsystem — public barrel.
  *
@@ -7,9 +5,9 @@
  * consumers dispatch through {@link selectRunner} / {@link RUNNERS}; the named
  * runners are exported for tests and for explicit wiring.
  */
-export { replRunner } from "./repl-runner";
-export { oneshotRunner } from "./oneshot-runner";
-export { linkRunner } from "./link-runner";
-export { RUNNERS, selectRunner } from "./registry";
-export { createReadStateStore, READ_STATE_HANDLE_KEY, ReadStateStore, } from "./read-state";
-export { createCheckpointStore, CHECKPOINT_HANDLE_KEY, CheckpointStore, } from "./checkpoint";
+export { replRunner } from "./repl-runner.js";
+export { oneshotRunner } from "./oneshot-runner.js";
+export { linkRunner } from "./link-runner.js";
+export { RUNNERS, selectRunner } from "./registry.js";
+export { createReadStateStore, READ_STATE_HANDLE_KEY, ReadStateStore } from "./read-state.js";
+export { createCheckpointStore, CHECKPOINT_HANDLE_KEY, CheckpointStore } from "./checkpoint.js";

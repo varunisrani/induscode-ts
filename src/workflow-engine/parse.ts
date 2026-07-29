@@ -1,66 +1,172 @@
-// @ts-nocheck
-// Type declarations recovered from dist/types (no runtime body)
-/**
- * Workflow script parser — extract and validate the leading `meta` export,
- * enforce determinism, and hand back the runnable sandbox body.
- *
- * A workflow script is plain JavaScript whose FIRST statement must be
- * `export const meta = { ... }` (an object literal). This module:
- *
- *   1. locates that leading export with a lexer-free, dependency-free scan,
- *   2. evaluates ONLY the `{ ... }` literal in a frozen, empty Node `vm`
- *      sandbox (no globals reachable, so the literal cannot call into
- *      anything), capturing the resulting plain object as {@link WorkflowMeta},
- *   3. validates the meta shape (name/description required, optional
- *      whenToUse/phases),
- *   4. enforces the determinism guard over the WHOLE script source —
- *      `Date.now()`, `Math.random()`, and `new Date()` are rejected so a
- *      workflow always produces the same orchestration plan, and
- *   5. strips the `export const meta = …;` statement so the remaining `body`
- *      runs as an ordinary async function body inside the engine sandbox.
- *
- * This is a dependency-free port of pi's acorn-based `parseWorkflowScript`
- * (pi-dynamic-workflows/src/workflow.ts). It deliberately does NOT pull in
- * `acorn`: the only thing the engine needs to read out of the source is the
- * leading literal, which a sandboxed `Function`/`vm` evaluation of that one
- * expression handles safely, and the determinism guard is a source string-scan
- * over the call/`new` forms pi's AST walk rejected.
- */
-/** One declared phase in the upfront `meta.phases` outline. */
+import vm from "node:vm";
+
 export interface WorkflowMetaPhase {
-    /** Human title for the phase row. */
-    title: string;
-    /** Optional one-line elaboration of what the phase does. */
-    detail?: string;
-    /** Optional model hint the phase prefers (documentation only). */
-    model?: string;
+  title: string;
+  detail?: string;
+  model?: string;
 }
-/** The validated `export const meta = { … }` header of a workflow script. */
+
 export interface WorkflowMeta {
-    /** Short snake_case identifier for the workflow. */
-    name: string;
-    /** Non-empty human description of what the workflow accomplishes. */
-    description: string;
-    /** Optional guidance on when a model should reach for this workflow. */
-    whenToUse?: string;
-    /** Optional upfront outline; live progress is still driven by `phase()`. */
-    phases?: WorkflowMetaPhase[];
+  name: string;
+  description: string;
+  whenToUse?: string;
+  phases?: WorkflowMetaPhase[];
 }
-/** The result of {@link parseWorkflowScript}: validated meta + runnable body. */
+
 export interface ParsedWorkflow {
-    /** The validated workflow header. */
-    meta: WorkflowMeta;
-    /** The script with the leading `export const meta = …` statement removed. */
-    body: string;
+  meta: WorkflowMeta;
+  body: string;
 }
-/** Message raised when a script reaches for a non-deterministic primitive. */
-export declare const NONDETERMINISM_ERROR = "Workflow scripts must be deterministic: Date.now()/Math.random()/new Date() are unavailable";
-/**
- * Parse a workflow script into its validated {@link WorkflowMeta} and the
- * runnable `body` (the script with the meta export removed).
- *
- * @param script the raw workflow JavaScript source
- * @throws if the first statement is not `export const meta = {literal}`, if the
- *   meta fails validation, or if the source uses a non-deterministic primitive
- */
-export declare function parseWorkflowScript(script: string): ParsedWorkflow;
+
+export const NONDETERMINISM_ERROR =
+  "Workflow scripts must be deterministic: Date.now()/Math.random()/new Date() are unavailable";
+
+export const NONDETERMINISTIC_PATTERNS = [
+  /\bDate\s*\.\s*now\s*\(/,
+  /\bMath\s*\.\s*random\s*\(/,
+  /\bnew\s+Date\b/,
+];
+
+export function parseWorkflowScript(script: string): ParsedWorkflow {
+  if (typeof script !== "string") throw new TypeError("workflow script must be a string");
+  assertDeterministicSource(script);
+  const located = locateMetaExport(script);
+  const meta = evaluateMetaLiteral(located.literal);
+  validateMeta(meta);
+  return { meta, body: script.slice(0, located.start) + script.slice(located.end) };
+}
+
+export function assertDeterministicSource(script: string): void {
+  for (const pattern of NONDETERMINISTIC_PATTERNS) {
+    if (pattern.test(script)) throw new Error(NONDETERMINISM_ERROR);
+  }
+}
+
+export function locateMetaExport(script: string): { start: number; end: number; literal: string } {
+  const firstToken = skipTrivia(script, 0);
+  const header = /export\s+const\s+meta\s*=\s*/y;
+  header.lastIndex = firstToken;
+  const match = header.exec(script);
+  if (!match || match.index !== firstToken) {
+    throw new Error("`export const meta = { name, description }` must be the first statement in the script");
+  }
+  const braceStart = header.lastIndex;
+  if (script[braceStart] !== "{") {
+    throw new Error("meta export must be assigned a plain object literal: `export const meta = { … }`");
+  }
+  const braceEnd = matchBraces(script, braceStart);
+  const literal = script.slice(braceStart, braceEnd);
+  let end = braceEnd;
+  const afterBrace = skipTrivia(script, braceEnd);
+  if (script[afterBrace] === ";") end = afterBrace + 1;
+  return { start: firstToken, end, literal };
+}
+
+export function skipTrivia(source: string, from: number): number {
+  let i = from;
+  while (i < source.length) {
+    const ch = source[i];
+    if (ch === " " || ch === "\t" || ch === "\n" || ch === "\r" || ch === "\f" || ch === "\v") {
+      i++;
+      continue;
+    }
+    if (ch === "/" && source[i + 1] === "/") {
+      i += 2;
+      while (i < source.length && source[i] !== "\n") i++;
+      continue;
+    }
+    if (ch === "/" && source[i + 1] === "*") {
+      i += 2;
+      while (i < source.length && !(source[i] === "*" && source[i + 1] === "/")) i++;
+      i += 2;
+      continue;
+    }
+    break;
+  }
+  return i;
+}
+
+export function matchBraces(source: string, open: number): number {
+  let depth = 0;
+  let i = open;
+  while (i < source.length) {
+    const ch = source[i];
+    if (ch === "/" && source[i + 1] === "/") {
+      i += 2;
+      while (i < source.length && source[i] !== "\n") i++;
+      continue;
+    }
+    if (ch === "/" && source[i + 1] === "*") {
+      i += 2;
+      while (i < source.length && !(source[i] === "*" && source[i + 1] === "/")) i++;
+      i += 2;
+      continue;
+    }
+    if (ch === '"' || ch === "'" || ch === "`") {
+      i = skipStringLike(source, i, ch);
+      continue;
+    }
+    if (ch === "{") depth++;
+    else if (ch === "}") {
+      depth--;
+      if (depth === 0) return i + 1;
+    }
+    i++;
+  }
+  throw new Error("meta object literal is not closed: missing `}`");
+}
+
+export function skipStringLike(source: string, start: number, quote: string): number {
+  let i = start + 1;
+  while (i < source.length) {
+    const ch = source[i];
+    if (ch === "\\") {
+      i += 2;
+      continue;
+    }
+    if (quote === "`" && ch === "$" && source[i + 1] === "{") {
+      let depth = 1;
+      i += 2;
+      while (i < source.length && depth > 0) {
+        if (source[i] === "{") depth++;
+        else if (source[i] === "}") depth--;
+        i++;
+      }
+      continue;
+    }
+    if (ch === quote) return i + 1;
+    i++;
+  }
+  throw new Error("unterminated string in meta object literal");
+}
+
+export function evaluateMetaLiteral(literal: string): unknown {
+  const context = vm.createContext(Object.create(null));
+  try {
+    return new vm.Script(`(${literal})`, { filename: "workflow.meta.js" }).runInContext(context, { timeout: 1000 });
+  } catch (error) {
+    const detail = error instanceof Error ? `: ${error.message}` : "";
+    throw new Error(`meta export must be a plain object literal${detail}`);
+  }
+}
+
+export function validateMeta(meta: unknown): asserts meta is WorkflowMeta {
+  if (!meta || typeof meta !== "object") throw new Error("meta must be an object");
+  const value = meta as Record<string, unknown>;
+  if (typeof value.name !== "string" || !value.name.trim()) throw new Error("meta.name must be a non-empty string");
+  if (typeof value.description !== "string" || !value.description.trim()) {
+    throw new Error("meta.description must be a non-empty string");
+  }
+  if (value.whenToUse !== undefined && typeof value.whenToUse !== "string") throw new Error("meta.whenToUse must be a string");
+  if (value.phases !== undefined) {
+    if (!Array.isArray(value.phases)) throw new Error("meta.phases must be an array");
+    for (const phase of value.phases) {
+      if (!phase || typeof phase !== "object" || typeof phase.title !== "string") {
+        throw new Error("each meta phase must have a title string");
+      }
+      if (phase.detail !== undefined && typeof phase.detail !== "string") {
+        throw new Error("meta phase detail must be a string");
+      }
+    }
+  }
+}

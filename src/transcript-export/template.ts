@@ -1,66 +1,272 @@
-// @ts-nocheck
-// Type declarations recovered from dist/types (no runtime body)
 /**
- * Page-shell template — the standalone HTML/CSS scaffold the transcript publisher
- * fills.
- *
- * This module is a freshly authored single-file page: its own element names
- * (`<main class="xscript">`, `.turn`, `.turn-tag`, `.turn-body`, `.tool-frame`,
- * `.aside-note`), its own stylesheet, and its own `{{TOKEN}}` placeholder names —
- * the {@link SHELL_SLOTS} values from the briefing contract
- * (`THEME_VARS`/`PAGE_SURFACE`/…/`MARKED_LIB`/`HIGHLIGHT_LIB`). None of the class
- * names, DOM structure, placeholder tokens, or color values are carried over from
- * any prior export template.
- *
- * The publisher computes a value for every slot and calls {@link fill} to splice
- * them in. The page is self-contained: theme colors arrive as CSS custom
- * properties in `:root`, the markdown and syntax-highlight libraries are inlined,
- * the session payload is embedded as base64, and a small client renderer
- * (the `SCRIPT` slot) hydrates the transcript on load.
+ * Template — the HTML page shell, inlined styles, and client renderer for the
+ * self-contained transcript export.
  */
-import { type ShellSlot } from "../briefing/contract";
-/**
- * The page stylesheet, emitted into the `STYLES` slot. Reads its colors from the
- * `--x-*` custom properties the `THEME_VARS` slot defines, so re-theming is a
- * matter of changing the variables, not the rules. Class names are this page's
- * own (`xscript`, `turn`, `tool-frame`, `aside-note`, the `sgr-*` family the
- * painter emits, and the highlight `xhl` block).
- */
-export declare const PAGE_STYLES: string;
-/**
- * The client-side renderer, emitted into the `SCRIPT` slot. Decodes the base64
- * session payload, walks its turns, and renders each into the `.xscript` root
- * using the inlined `marked` (markdown) and `highlight.js` (code) libraries. Code
- * fences are highlighted into the page's own `xhl-*` classes; prose is parsed by
- * marked. Pre-rendered tool widgets and SGR-painted text arrive already-HTML in
- * the payload and are inserted verbatim.
- */
-export declare const CLIENT_SCRIPT: string;
-/**
- * The HTML page shell carrying every {@link SHELL_SLOTS} placeholder as a
- * `{{TOKEN}}` marker. {@link fill} replaces each marker with its computed value.
- * The structure: a themed `:root`, the inlined stylesheet, the two vendored
- * libraries, the base64 payload bound to `window.__XSCRIPT_PAYLOAD__`, and the
- * client renderer that hydrates `#xscript-root`.
- */
-export declare const PAGE_SHELL = "<!doctype html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\" />\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />\n<title>Session Transcript</title>\n<style>\n:root {\n{{THEME_VARS}}\n  --x-page-surface: {{PAGE_SURFACE}};\n  --x-card-surface: {{CARD_SURFACE}};\n  --x-note-surface: {{NOTE_SURFACE}};\n}\n{{STYLES}}\n</style>\n</head>\n<body>\n<main class=\"xscript\">\n  <header class=\"xscript-head\">\n    <h1>Session Transcript</h1>\n    <div class=\"xscript-meta\">Self-contained HTML export</div>\n  </header>\n  <div id=\"xscript-root\"></div>\n</main>\n<script>\n/* {{MARKED_LIB}} */\n</script>\n<script>\n/* {{HIGHLIGHT_LIB}} */\n</script>\n<script>\nwindow.__XSCRIPT_PAYLOAD__ = \"{{PAYLOAD}}\";\n</script>\n<script>\n{{SCRIPT}}\n</script>\n</body>\n</html>";
-/**
- * The map a {@link fill} call supplies — one value per {@link ShellSlot} token. A
- * value may be omitted, in which case its placeholder is replaced with the empty
- * string (so a partial fill leaves no stray `{{TOKEN}}` in the output).
- */
-export type SlotValues = Partial<Record<ShellSlot, string>>;
-/**
- * Replace every `{{TOKEN}}` placeholder in a template with the value supplied for
- * that slot, returning the filled string.
- *
- * Walks the known {@link SHELL_SLOTS} (not an open scan), so only sanctioned
- * placeholders are substituted and a stray `{{…}}` in user content is left
- * untouched. Each token is replaced globally; a slot with no supplied value
- * collapses to the empty string. The replacement is value-literal — a `$` in a
- * value does not trigger regex backreference expansion.
- *
- * @param template the shell carrying `{{TOKEN}}` markers
- * @param values   the per-slot values to splice in
- */
-export declare function fill(template: string, values: SlotValues): string;
+
+export const SHELL_SLOTS: Readonly<Record<string, string>> = Object.freeze({
+  themeVars: "THEME_VARS",
+  pageSurface: "PAGE_SURFACE",
+  cardSurface: "CARD_SURFACE",
+  noteSurface: "NOTE_SURFACE",
+  styles: "STYLES",
+  script: "SCRIPT",
+  payload: "PAYLOAD",
+  markedLib: "MARKED_LIB",
+  highlightLib: "HIGHLIGHT_LIB",
+});
+
+const PAGE_STYLES = `
+:root { color-scheme: dark light; }
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body {
+  background: var(--x-page-surface);
+  color: var(--x-ink);
+  font: 15px/1.6 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+.xscript {
+  max-width: 56rem;
+  margin: 0 auto;
+  padding: 2.5rem 1.25rem 6rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+.xscript-head {
+  border-bottom: 1px solid var(--x-border);
+  padding-bottom: 1rem;
+  margin-bottom: 0.5rem;
+}
+.xscript-head h1 {
+  margin: 0;
+  font-size: 1.35rem;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+.xscript-head .xscript-meta {
+  margin-top: 0.35rem;
+  color: var(--x-ink-muted);
+  font-size: 0.85rem;
+}
+.turn {
+  background: var(--x-card-surface);
+  border: 1px solid var(--x-border);
+  border-radius: 0.65rem;
+  padding: 1rem 1.15rem;
+  overflow: hidden;
+}
+.turn[data-role="user"] { border-left: 3px solid var(--x-user-role); }
+.turn[data-role="agent"] { border-left: 3px solid var(--x-agent-role); }
+.turn[data-role="tool"] { border-left: 3px solid var(--x-tool-role); }
+.turn-tag {
+  display: inline-block;
+  font-size: 0.72rem;
+  font-weight: 650;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-bottom: 0.6rem;
+  color: var(--x-ink-muted);
+}
+.turn[data-role="user"] .turn-tag { color: var(--x-user-role); }
+.turn[data-role="agent"] .turn-tag { color: var(--x-agent-role); }
+.turn[data-role="tool"] .turn-tag { color: var(--x-tool-role); }
+.turn-body { word-break: break-word; }
+.turn-body > :first-child { margin-top: 0; }
+.turn-body > :last-child { margin-bottom: 0; }
+.turn-body a { color: var(--x-accent); text-decoration: none; }
+.turn-body a:hover { text-decoration: underline; }
+.turn-body p { margin: 0.6rem 0; }
+.turn-body img { max-width: 100%; border-radius: 0.4rem; }
+.turn-body code {
+  font-family: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
+  font-size: 0.88em;
+  background: var(--x-note-surface);
+  padding: 0.1em 0.35em;
+  border-radius: 0.3rem;
+}
+.turn-body pre {
+  background: var(--x-note-surface);
+  border: 1px solid var(--x-border);
+  border-radius: 0.5rem;
+  padding: 0.9rem 1rem;
+  overflow-x: auto;
+  margin: 0.75rem 0;
+}
+.turn-body pre code { background: none; padding: 0; }
+.tool-frame {
+  font-family: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
+  font-size: 0.85rem;
+  background: var(--x-note-surface);
+  border: 1px solid var(--x-border);
+  border-radius: 0.5rem;
+  padding: 0.85rem 1rem;
+  margin: 0.5rem 0;
+  overflow-x: auto;
+  white-space: pre-wrap;
+}
+.aside-note {
+  background: var(--x-note-surface);
+  border: 1px dashed var(--x-border);
+  border-radius: 0.5rem;
+  padding: 0.75rem 1rem;
+  color: var(--x-ink-muted);
+  font-size: 0.9rem;
+}
+.sgr-bold { font-weight: 700; }
+.sgr-dim { opacity: 0.72; }
+.sgr-italic { font-style: italic; }
+.sgr-underline { text-decoration: underline; }
+.sgr-strike { text-decoration: line-through; }
+.sgr-underline.sgr-strike { text-decoration: underline line-through; }
+.sgr-blink { animation: x-blink 1.1s steps(2, start) infinite; }
+.sgr-hidden { visibility: hidden; }
+@keyframes x-blink { 50% { opacity: 0; } }
+.xhl-keyword { color: var(--x-accent); }
+.xhl-string { color: var(--x-user-role); }
+.xhl-comment { color: var(--x-ink-muted); font-style: italic; }
+.xhl-number, .xhl-literal { color: var(--x-tool-role); }
+`.trim();
+
+const CLIENT_SCRIPT = `
+(function () {
+  "use strict";
+  var root = document.getElementById("xscript-root");
+  if (!root) return;
+
+  var raw;
+  try {
+    raw = JSON.parse(decodeURIComponent(escape(atob(window.__XSCRIPT_PAYLOAD__ || ""))));
+  } catch (err) {
+    root.textContent = "Unable to decode transcript payload.";
+    return;
+  }
+
+  function hl(code, lang) {
+    try {
+      if (lang && window.hljs && window.hljs.getLanguage(lang)) {
+        return window.hljs.highlight(code, { language: lang }).value;
+      }
+      if (window.hljs) return window.hljs.highlightAuto(code).value;
+    } catch (e) {}
+    return null;
+  }
+
+  if (window.marked && window.marked.setOptions) {
+    window.marked.setOptions({
+      gfm: true,
+      breaks: false,
+      highlight: function (code, lang) {
+        var out = hl(code, lang);
+        return out == null ? code : out;
+      },
+    });
+  }
+
+  function md(text) {
+    try {
+      if (window.marked && window.marked.parse) {
+        return window.marked.parse(text, { async: false });
+      }
+    } catch (e) {}
+    var div = document.createElement("div");
+    div.textContent = text;
+    return div.innerHTML;
+  }
+
+  function el(tag, cls) {
+    var node = document.createElement(tag);
+    if (cls) node.className = cls;
+    return node;
+  }
+
+  function renderTurn(turn) {
+    if (turn.kind === "note") {
+      var note = el("div", "aside-note");
+      note.innerHTML = turn.html != null ? turn.html : md(turn.text || "");
+      return note;
+    }
+    var card = el("section", "turn");
+    card.setAttribute("data-role", turn.role || "agent");
+    var tag = el("span", "turn-tag");
+    tag.textContent = turn.label || turn.role || "";
+    card.appendChild(tag);
+    var body = el("div", "turn-body");
+    if (turn.html != null) {
+      body.innerHTML = turn.html;
+    } else if (turn.frame) {
+      var frame = el("div", "tool-frame");
+      frame.innerHTML = turn.frame;
+      body.appendChild(frame);
+    } else {
+      body.innerHTML = md(turn.text || "");
+    }
+    card.appendChild(body);
+    return card;
+  }
+
+  var turns = Array.isArray(raw.turns) ? raw.turns : [];
+  for (var i = 0; i < turns.length; i++) {
+    root.appendChild(renderTurn(turns[i]));
+  }
+})();
+`.trim();
+
+const PAGE_SHELL = `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Session Transcript</title>
+<style>
+:root {
+{{THEME_VARS}}
+  --x-page-surface: {{PAGE_SURFACE}};
+  --x-card-surface: {{CARD_SURFACE}};
+  --x-note-surface: {{NOTE_SURFACE}};
+}
+{{STYLES}}
+</style>
+</head>
+<body>
+<main class="xscript">
+  <header class="xscript-head">
+    <h1>Session Transcript</h1>
+    <div class="xscript-meta">Self-contained HTML export</div>
+  </header>
+  <div id="xscript-root"></div>
+</main>
+<script>
+/* {{MARKED_LIB}} */
+</script>
+<script>
+/* {{HIGHLIGHT_LIB}} */
+</script>
+<script>
+window.__XSCRIPT_PAYLOAD__ = "{{PAYLOAD}}";
+</script>
+<script>
+{{SCRIPT}}
+</script>
+</body>
+</html>
+`;
+
+export { PAGE_STYLES, CLIENT_SCRIPT, PAGE_SHELL };
+
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+export function fill(
+  template: string,
+  values: Readonly<Record<string, string>>,
+): string {
+  let out = template;
+  for (const token of Object.values(SHELL_SLOTS)) {
+    const value = values[token] ?? "";
+    const marker = new RegExp(`\\{\\{${escapeRegExp(token)}\\}\\}`, "g");
+    out = out.replace(marker, () => value);
+  }
+  return out;
+}

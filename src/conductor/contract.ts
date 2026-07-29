@@ -38,8 +38,8 @@
  */
 import type { AgentMessage, AgentTool, CanUseToolFn, ThinkingLevel } from "indusagi/agent";
 import type { KnownProvider, Model, Usage } from "indusagi/ai";
-import type { PermissionMode } from "../settings";
-import type { ApprovalResolver } from "./permissions";
+import type { PermissionMode } from "../settings.js";
+import type { ApprovalResolver } from "./permissions.js";
 /** Re-exported framework vocabulary that conductor consumers routinely need. */
 export type { AgentMessage, AgentTool, CanUseToolFn, ThinkingLevel, Model, Usage, KnownProvider };
 /** Re-exported permission vocabulary, so conductor consumers get it in one import. */
@@ -80,7 +80,9 @@ export interface ConductorFault {
  * @param message a human-readable, single-line summary
  * @param cause   optional underlying error or structured detail
  */
-export declare function conductorFault(kind: FaultKind, message: string, cause?: unknown): ConductorFault;
+export function conductorFault(kind: FaultKind, message: string, cause?: unknown): ConductorFault {
+  return cause === undefined ? { kind, message } : { kind, message, cause };
+}
 /**
  * The product-level event stream the conductor emits to its consumers (the
  * interactive UI, the print/JSON mode, the JSON-RPC link).
@@ -172,7 +174,7 @@ export type SignalHandler = (signal: SessionSignal) => void;
  * can evolve without colliding with any other versioned artifact in the app.
  * This is deliberately the conductor's own vocabulary.
  */
-export declare const TRANSCRIPT_SCHEMA: "indus/transcript@1";
+export const TRANSCRIPT_SCHEMA = "indus/transcript@1" as const;
 /** The literal type of {@link TRANSCRIPT_SCHEMA}. */
 export type TranscriptSchema = typeof TRANSCRIPT_SCHEMA;
 /**

@@ -25,7 +25,7 @@
  * clock-as-state, or any shared mutable value.
  */
 import type { TSchema } from "@sinclair/typebox";
-import { type BridgeKey } from "../contract";
+import { type BridgeKey } from "../contract.js";
 /**
  * The qualified, collision-free name the model sees for a remote tool —
  * `"<server>__<tool>"`, using the framework's bridge {@link QUALIFIER}.

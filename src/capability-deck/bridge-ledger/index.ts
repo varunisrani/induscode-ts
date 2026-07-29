@@ -20,8 +20,8 @@
  * LedgerSnapshot}, {@link reduceLedger}) continue to live in the deck contract;
  * this module re-exports the behavior that operates on them.
  */
-export { qualifyBridgeName, bridgeContentKey, bridgeUlidKey, } from "./key";
-export type { BridgeLedger, EnrollRequest } from "./ledger";
-export { emptyBridgeLedger, bridgeLedgerFromLog, enrollBridgeCard, retire, withdrawServer, liveCapabilities, liveCapabilitiesForServer, } from "./ledger";
-export type { AttachResult } from "./network";
-export { attachBridgeCapabilities, detachBridge, bridgeBoxToCapabilities, bridgeCapabilityCard, bridgeConfig, } from "./network";
+export { qualifyBridgeName, bridgeContentKey, bridgeUlidKey, } from "./key.js";
+export type { BridgeLedger, EnrollRequest } from "./ledger.js";
+export { emptyBridgeLedger, bridgeLedgerFromLog, enrollBridgeCard, retire, withdrawServer, liveCapabilities, liveCapabilitiesForServer, } from "./ledger.js";
+export type { AttachResult } from "./network.js";
+export { attachBridgeCapabilities, detachBridge, bridgeBoxToCapabilities, bridgeCapabilityCard, bridgeConfig, } from "./network.js";

@@ -9,5 +9,5 @@
  * the {@link PriorTurn} fork candidate. Consumers import the session-library
  * surface from `src/sessions` rather than reaching into the individual modules.
  */
-export type { SavedSession, BranchNode, PriorTurn } from "./contract";
-export { SessionLibrary, type SessionLibraryOptions } from "./library";
+export type { SavedSession, BranchNode, PriorTurn } from "./contract.js";
+export { SessionLibrary, type SessionLibraryOptions } from "./library.js";

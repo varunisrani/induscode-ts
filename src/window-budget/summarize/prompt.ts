@@ -1,58 +1,149 @@
-// @ts-nocheck
-// Type declarations recovered from dist/types (no runtime body)
 /**
- * Window-budget — summarization prompt assembly (re-authored).
+ * Window-budget — summarization prompt assembly.
  *
  * When the transcript crosses budget, the older head is *condensed* into one
  * synthetic message. This module turns the dropped slice of {@link AgentMessage}s
- * into the single text payload handed to the model completer. Two pieces ship
- * here:
- *
- *   1. {@link CONDENSER_BRIEF} — the system-prompt brief that frames the model as
- *      a *recorder*, not a continuation of the chat: read the transcript as data
- *      and emit only the structured digest.
- *   2. {@link buildSummaryPrompt} — flattens the dropped messages into a tagged
- *      block and appends the section template the model fills in.
- *
- * OWN VOCABULARY (an original prompt design):
- *   - Section headings are `# Objective / # Guardrails /
- *     # Status (Shipped / Active / Stuck) / # Rationale / # Plan / # Carryover`.
- *   - The transcript is wrapped in `<scrollback>…</scrollback>` and a prior digest
- *     (the branch-archival / iterative-refresh path) in
- *     `<carried-digest>…</carried-digest>`.
- *   - Per-message lines use `» role:` markers (`» you`, `» agent`,
- *     `» agent.plan`, `» agent.call`, `» tool`).
- *
- * No token math, no model calls, no I/O here — only string assembly. The scope
- * flag selects the framing line (active-session checkpoint vs abandoned-branch
- * archive); everything else is one code path.
+ * into the single text payload handed to the model completer.
  */
 import type { AgentMessage, CondenseScope } from "../contract.js";
+
 /**
  * The system-prompt brief for the condenser model. Frames the request as a
  * record-keeping task — the model must NOT answer, continue, or act on the
- * conversation; it only transcribes it into the fixed section layout. Re-authored
- * wording; shares no sentences with the legacy `SUMMARIZATION_SYSTEM_PROMPT`.
+ * conversation; it only transcribes it into the fixed section layout.
  */
-export declare const CONDENSER_BRIEF: string;
+export const CONDENSER_BRIEF: string = [
+  "You are a transcript recorder for a long-running coding session.",
+  "The text you receive is archival data, not a live chat \u2014 do NOT reply to it,",
+  "continue it, run tools, or ask questions. Your sole job is to distill it into",
+  "a compact, faithful digest under the exact headings requested below.",
+  "",
+  "Rules:",
+  "- Preserve concrete facts: file paths, identifiers, commands, error text,",
+  "  decisions, and anything the session would need to resume without the",
+  "  original turns.",
+  "- Prefer specifics over paraphrase; never invent details that are not present.",
+  "- Keep each heading even if a section is empty (write `none` under it).",
+  "- Emit only the digest \u2014 no preamble, no sign-off, no commentary."
+].join("\n");
+
+const TURN_MARK = "\xBB";
+const SECTION_TEMPLATE: string = [
+  "# Objective",
+  "# Guardrails",
+  "# Status (Shipped / Active / Stuck)",
+  "# Rationale",
+  "# Plan",
+  "# Carryover"
+].join("\n");
+
+function tidy(text: string): string {
+  return text.replace(/\r\n/g, "\n").replace(/[ \t]+\n/g, "\n").trim();
+}
+
+function readContent(content: unknown): string {
+  if (typeof content === "string") return content;
+  const parts: string[] = [];
+  for (const block of content as Array<Record<string, unknown>>) {
+    if (block && typeof block === "object" && "type" in block) {
+      const b = block;
+      if (b.type === "text" && typeof b.text === "string") {
+        parts.push(b.text);
+      } else if (b.type === "image") {
+        parts.push("[image]");
+      }
+    }
+  }
+  return parts.join("\n");
+}
+
+function flattenMessage(message: AgentMessage): string {
+  switch (message.role) {
+    case "user": {
+      const text = tidy(readContent(message.content));
+      return text ? `${TURN_MARK} you: ${text}` : "";
+    }
+    case "assistant": {
+      const lines: string[] = [];
+      for (const block of message.content) {
+        if (block.type === "text" && block.text.trim()) {
+          lines.push(`${TURN_MARK} agent: ${tidy(block.text)}`);
+        } else if (block.type === "thinking" && block.thinking.trim()) {
+          lines.push(`${TURN_MARK} agent.plan: ${tidy(block.thinking)}`);
+        } else if (block.type === "toolCall") {
+          const args = safeJson(block.arguments);
+          lines.push(`${TURN_MARK} agent.call ${block.name}: ${args}`);
+        }
+      }
+      return lines.join("\n");
+    }
+    case "toolResult": {
+      const text = tidy(readContent(message.content));
+      const tag = message.isError ? "tool!err" : "tool";
+      return `${TURN_MARK} ${tag} (${message.toolName}): ${text}`;
+    }
+    case "bashExecution": {
+      const out = tidy(message.output);
+      const code = message.exitCode ?? "n/a";
+      return `${TURN_MARK} shell$ ${tidy(message.command)} [exit ${code}]\n${out}`;
+    }
+    case "custom": {
+      const text = tidy(readContent(message.content));
+      return text ? `${TURN_MARK} note (${message.customType}): ${text}` : "";
+    }
+    case "branchSummary":
+    case "compactionSummary": {
+      const text = tidy(message.summary);
+      return text ? `${TURN_MARK} digest: ${text}` : "";
+    }
+    default:
+      return "";
+  }
+}
+
+function safeJson(value: unknown): string {
+  try {
+    const json = JSON.stringify(value);
+    return json === undefined ? "{}" : json;
+  } catch {
+    return "{}";
+  }
+}
+
 /**
  * Flatten a list of messages into a single `\n`-joined block of `» role:` lines.
- * Exported so the condenser can reuse it for diagnostics/tests.
  */
-export declare function flattenTranscript(messages: AgentMessage[]): string;
+export function flattenTranscript(messages: AgentMessage[]): string {
+  const lines: string[] = [];
+  for (const message of messages) {
+    const rendered = flattenMessage(message);
+    if (rendered) lines.push(rendered);
+  }
+  return lines.join("\n");
+}
+
+function framing(scope: CondenseScope): string {
+  return scope === "branch"
+    ? "Archive this abandoned branch so it can be folded back as context later. Distill it under these headings:"
+    : "Condense the older portion of this active session so recent turns stay verbatim. Distill it under these headings:";
+}
+
 /**
  * Build the full summarization prompt for a slice of dropped messages.
- *
- * The result is one string: the scope framing, the flattened transcript wrapped
- * in `<scrollback>`, an optional carried digest wrapped in `<carried-digest>`
- * (the iterative-refresh / branch-archival input), and the section template the
- * model fills in. Pass this as the user turn to the injectable completer; pair it
- * with {@link CONDENSER_BRIEF} as the system prompt.
- *
- * @param messages  the dropped prefix to summarize
- * @param scope     `"session"` (active checkpoint) or `"branch"` (archive)
- * @param priorDigest  an optional earlier digest to refresh/extend, threaded in
- *                      under `<carried-digest>` so the model merges rather than
- *                      re-derives. Omit for a first-pass condense.
  */
-export declare function buildSummaryPrompt(messages: AgentMessage[], scope: CondenseScope, priorDigest?: string): string;
+export function buildSummaryPrompt(
+  messages: AgentMessage[],
+  scope: CondenseScope,
+  priorDigest?: string,
+): string {
+  const transcript = flattenTranscript(messages);
+  const blocks: string[] = [framing(scope)];
+  if (priorDigest && priorDigest.trim()) {
+    blocks.push(
+      `<carried-digest>\n${tidy(priorDigest)}\n</carried-digest>`,
+    );
+  }
+  blocks.push(`<scrollback>\n${transcript}\n</scrollback>`);
+  blocks.push(SECTION_TEMPLATE);
+  return blocks.join("\n\n");
+}

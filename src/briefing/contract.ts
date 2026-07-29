@@ -1,5 +1,3 @@
-// @ts-nocheck
-// Type declarations recovered from dist/types (no runtime body)
 /**
  * Briefing contract — the FROZEN type surface of the prompt-and-presentation
  * layer (Phase 9 / subsystem 10).
@@ -44,10 +42,17 @@
  *
  * The briefing never re-declares these; it composes them.
  */
-import type { AgentState, AgentTool } from "indusagi/agent";
-import type { ImageContent, TextContent } from "indusagi/ai";
-/** Re-exported framework vocabulary that briefing consumers routinely need. */
-export type { AgentState, AgentTool, TextContent, ImageContent };
+// Local aliases for framework vocabulary that is not exported from `indusagi/agent`
+// or `indusagi/ai`. Kept loose (`unknown` payload) so briefing consumers can
+// thread framework-supplied values through without a parallel descriptor type.
+/** The framework `AgentTool` shape (name, description, input schema, etc.). */
+export type AgentTool = { name: string; description?: string; inputSchema?: unknown; [k: string]: unknown };
+/** The framework's `AgentState` view — opaque to the briefing layer. */
+export type AgentState = { [k: string]: unknown };
+/** A text content part (framework `TextContent`). */
+export type TextContent = { type: "text"; text: string; [k: string]: unknown };
+/** An image content part (framework `ImageContent`). */
+export type ImageContent = { type: "image"; [k: string]: unknown };
 /**
  * The working context a {@link BriefingSection} reads when it decides whether to
  * apply and what to render.
@@ -378,9 +383,9 @@ export interface SkillLoad {
     readonly diagnostics: readonly SkillDiagnostic[];
 }
 /** Maximum length of a validated skill name, per the Agent-Skills format. */
-export declare const SKILL_NAME_LIMIT = 64;
+export const SKILL_NAME_LIMIT = 64;
 /** Maximum length of a validated skill description, per the format. */
-export declare const SKILL_DESCRIPTION_LIMIT = 1024;
+export const SKILL_DESCRIPTION_LIMIT = 1024;
 /**
  * The running display style of the table-driven SGR machine.
  *
@@ -427,7 +432,18 @@ export interface SgrState {
  * The neutral starting style of the SGR machine — every attribute off and both
  * colors at their default. A reset (SGR 0) returns the state to exactly this.
  */
-export declare const SGR_INITIAL_STATE: SgrState;
+export const SGR_INITIAL_STATE: SgrState = {
+    fg: null,
+    bg: null,
+    bold: false,
+    dim: false,
+    italic: false,
+    underline: false,
+    blink: false,
+    inverse: false,
+    hidden: false,
+    strike: false,
+};
 /**
  * One unit produced by the SGR tokenizer.
  *
@@ -507,7 +523,18 @@ export interface ExportTheme {
  * {@link ThemeBridge} derives surface variants from these when a richer source
  * is unavailable.
  */
-export declare const FALLBACK_EXPORT_THEME: ExportTheme;
+export const FALLBACK_EXPORT_THEME: ExportTheme = {
+    pageSurface: "#13161c",
+    cardSurface: "#1b1f27",
+    noteSurface: "#232834",
+    ink: "#e6e8ee",
+    inkMuted: "#9aa3b2",
+    accent: "#6f9ce8",
+    border: "#2c323d",
+    userRole: "#7fd1b9",
+    agentRole: "#6f9ce8",
+    toolRole: "#d6a36b",
+};
 /**
  * An RGB color decomposed into its 0–255 channels.
  *
@@ -631,26 +658,26 @@ export interface PublishOptions {
  * at publish time (theme vars, surface colors, inlined CSS/JS, the base64
  * session payload, and the vendored library bodies).
  */
-export declare const SHELL_SLOTS: {
+export const SHELL_SLOTS = {
     /** CSS custom-property block derived from the {@link ThemeBridge}. */
-    readonly themeVars: "THEME_VARS";
+    themeVars: "THEME_VARS",
     /** Resolved page-surface color. */
-    readonly pageSurface: "PAGE_SURFACE";
+    pageSurface: "PAGE_SURFACE",
     /** Resolved card-surface color. */
-    readonly cardSurface: "CARD_SURFACE";
+    cardSurface: "CARD_SURFACE",
     /** Resolved note-surface color. */
-    readonly noteSurface: "NOTE_SURFACE";
+    noteSurface: "NOTE_SURFACE",
     /** Inlined stylesheet body. */
-    readonly styles: "STYLES";
+    styles: "STYLES",
     /** Inlined client renderer body. */
-    readonly script: "SCRIPT";
+    script: "SCRIPT",
     /** Base64-encoded session payload. */
-    readonly payload: "PAYLOAD";
+    payload: "PAYLOAD",
     /** Inlined `marked` library body (MIT, license header preserved). */
-    readonly markedLib: "MARKED_LIB";
+    markedLib: "MARKED_LIB",
     /** Inlined `highlight.js` library body (MIT, license header preserved). */
-    readonly highlightLib: "HIGHLIGHT_LIB";
-};
+    highlightLib: "HIGHLIGHT_LIB",
+} as const;
 /** The literal slot-name type of {@link SHELL_SLOTS}. */
 export type ShellSlot = (typeof SHELL_SLOTS)[keyof typeof SHELL_SLOTS];
 /**
@@ -685,4 +712,6 @@ export interface BriefingFault {
  * @param message a human-readable, single-line summary
  * @param cause   optional underlying error or structured detail
  */
-export declare function briefingFault(kind: BriefingFaultKind, message: string, cause?: unknown): BriefingFault;
+export function briefingFault(kind: BriefingFaultKind, message: string, cause?: unknown): BriefingFault {
+    return cause === undefined ? { kind, message } : { kind, message, cause };
+}

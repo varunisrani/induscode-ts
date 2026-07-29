@@ -1,79 +1,158 @@
-// @ts-nocheck
-// Type declarations recovered from dist/types (no runtime body)
 /**
  * Replay — read an NDJSON trace file back into probes and trails.
- *
- * The file sink writes one {@link TraceRecord} per line; replay is the inverse.
- * It parses a chunk or line stream, validates each record, and exposes the
- * recovered probes in three increasingly cooked forms:
- *
- *   - {@link replaySignals} — the raw {@link Signal} stream, in file order;
- *   - {@link replayProbes} — the final probe value per id (close wins over open),
- *     which is what you usually want for offline analysis;
- *   - {@link replayTrails} — the probes grouped into per-trail trees, each with a
- *     root and a parent->children map, ready to render.
- *
- * Replay never imports the framework and performs no recording — it is a pure
- * reader over the durable format pinned in `serialize.ts`. A malformed line is,
- * by default, skipped rather than fatal, so a trace truncated by a crash still
- * yields everything written before the break.
  */
-import { Probe, ProbeId, Signal, TrailId } from "./contract";
-import { TraceRecord } from "./serialize";
-/** A source of raw bytes/text chunks (a file read stream, stdin, a buffer). */
+import {
+  isClosedProbe,
+  type Probe,
+  type ProbeId,
+  type Signal,
+  type TrailId,
+} from "./contract.js";
+import { decodeRecord, LINE_FEED, RECORD_VERSION, type TraceRecord } from "./serialize.js";
+
 export type ChunkSource = AsyncIterable<string | Uint8Array> | Iterable<string | Uint8Array>;
-/** Options shared by the replay readers. */
+
 export interface ReplayOptions {
-    /** Throw on a malformed line instead of skipping it; defaults to `false`. */
-    readonly strict?: boolean;
+  readonly strict?: boolean;
 }
-/**
- * Split a chunk source into complete text lines.
- *
- * Buffers across chunks, splits on `\n` only, and emits a trailing unterminated
- * line at end-of-stream so a final non-newline frame is not dropped.
- */
-export declare function readLines(source: ChunkSource): AsyncGenerator<string, void, unknown>;
-/**
- * Decode a chunk source into a stream of validated {@link TraceRecord}s.
- *
- * Malformed JSON or a record failing the shape check is skipped (or rethrown
- * when `strict`).
- */
-export declare function readRecords(source: ChunkSource, options?: ReplayOptions): AsyncGenerator<TraceRecord, void, unknown>;
-/** Reconstruct the {@link Signal} stream from a chunk source, in file order. */
-export declare function replaySignals(source: ChunkSource, options?: ReplayOptions): AsyncGenerator<Signal, void, unknown>;
-/**
- * Collapse a trace into the final value of each probe, keyed by id.
- *
- * Records arrive in lifecycle order (open -> update* -> close); the last record
- * for an id wins, so a closed probe supersedes its open. The returned map
- * preserves first-seen insertion order.
- */
-export declare function replayProbes(source: ChunkSource, options?: ReplayOptions): Promise<Map<ProbeId, Probe>>;
-/** One reconstructed trail: its root probe plus the parent->children index. */
+
+const TEXT_DECODER = new TextDecoder();
+
+function chunkToText(chunk: string | Uint8Array): string {
+  return typeof chunk === "string" ? chunk : TEXT_DECODER.decode(chunk, { stream: true });
+}
+
+export async function* readLines(
+  source: ChunkSource,
+): AsyncGenerator<string, void, unknown> {
+  let buffer = "";
+  for await (const chunk of source) {
+    buffer += chunkToText(chunk);
+    let at = buffer.indexOf(LINE_FEED);
+    while (at !== -1) {
+      const line = buffer.slice(0, at);
+      buffer = buffer.slice(at + 1);
+      if (line.trim().length > 0) yield line;
+      at = buffer.indexOf(LINE_FEED);
+    }
+  }
+  buffer += TEXT_DECODER.decode();
+  if (buffer.trim().length > 0) yield buffer;
+}
+
+function isValidRecord(value: unknown): value is TraceRecord {
+  if (value === null || typeof value !== "object") return false;
+  const r = value as Record<string, unknown>;
+  return (
+    r.v === RECORD_VERSION &&
+    (r.phase === "open" || r.phase === "update" || r.phase === "close") &&
+    typeof r.at === "number" &&
+    r.probe !== null &&
+    typeof r.probe === "object"
+  );
+}
+
+export async function* readRecords(
+  source: ChunkSource,
+  options: ReplayOptions = {},
+): AsyncGenerator<TraceRecord, void, unknown> {
+  for await (const line of readLines(source)) {
+    let record: TraceRecord;
+    try {
+      record = decodeRecord(line);
+    } catch (error) {
+      if (options.strict) throw error;
+      continue;
+    }
+    if (!isValidRecord(record)) {
+      if (options.strict) {
+        throw new Error("insight replay: malformed trace record");
+      }
+      continue;
+    }
+    yield record;
+  }
+}
+
+export async function* replaySignals(
+  source: ChunkSource,
+  options: ReplayOptions = {},
+): AsyncGenerator<Signal, void, unknown> {
+  for await (const record of readRecords(source, options)) {
+    const frozen = Object.freeze({ ...record.probe });
+    if (record.phase === "close") {
+      yield { phase: "close", probe: frozen as Probe & { endedAt: number; status: "ok" | "error" }, at: record.at };
+    } else {
+      yield { phase: record.phase, probe: frozen, at: record.at };
+    }
+  }
+}
+
+export async function replayProbes(
+  source: ChunkSource,
+  options: ReplayOptions = {},
+): Promise<Map<ProbeId, Probe>> {
+  const byId = new Map<ProbeId, Probe>();
+  for await (const record of readRecords(source, options)) {
+    byId.set(record.probe.id, Object.freeze({ ...record.probe }));
+  }
+  return byId;
+}
+
 export interface ReplayedTrail {
-    /** The trail id every probe in this tree shares. */
-    readonly trailId: TrailId;
-    /** The root probe (parentId === null), or `null` if the root was never seen. */
-    readonly root: Probe | null;
-    /** Every probe in the trail, keyed by id, in first-seen order. */
-    readonly probes: ReadonlyMap<ProbeId, Probe>;
-    /** Child probe ids per parent id; roots are listed under the empty key. */
-    readonly children: ReadonlyMap<ProbeId | null, readonly ProbeId[]>;
-    /** Whether every probe in the trail reached a terminal state. */
-    readonly complete: boolean;
+  readonly trailId: TrailId;
+  readonly root: Probe | null;
+  readonly probes: ReadonlyMap<ProbeId, Probe>;
+  readonly children: ReadonlyMap<ProbeId | null, readonly ProbeId[]>;
+  readonly complete: boolean;
 }
-/**
- * Group a trace into per-trail trees.
- *
- * Each {@link ReplayedTrail} carries its probes, a parent->children adjacency
- * map (so a renderer can walk the tree without re-scanning), the located root,
- * and a completeness flag. Trails appear in the order their first probe was
- * seen.
- *
- * @param source the NDJSON chunk source
- * @param options see {@link ReplayOptions}
- * @returns one {@link ReplayedTrail} per distinct trail id
- */
-export declare function replayTrails(source: ChunkSource, options?: ReplayOptions): Promise<ReplayedTrail[]>;
+
+async function* finalProbes(
+  source: ChunkSource,
+  options: ReplayOptions,
+): AsyncGenerator<Probe, void, unknown> {
+  const final = await replayProbes(source, options);
+  for (const probe of final.values()) yield probe;
+}
+
+function buildTrail(
+  trailId: TrailId,
+  probes: ReadonlyMap<ProbeId, Probe>,
+): ReplayedTrail {
+  const children = new Map<ProbeId | null, ProbeId[]>();
+  let root: Probe | null = null;
+  let complete = true;
+  for (const probe of probes.values()) {
+    const key = probe.parentId;
+    const bucket = children.get(key);
+    if (bucket === undefined) children.set(key, [probe.id]);
+    else bucket.push(probe.id);
+    if (probe.parentId === null) root = probe;
+    if (!isClosedProbe(probe)) complete = false;
+  }
+  return {
+    trailId,
+    root,
+    probes,
+    children,
+    complete,
+  };
+}
+
+export async function replayTrails(
+  source: ChunkSource,
+  options: ReplayOptions = {},
+): Promise<ReplayedTrail[]> {
+  const probesByTrail = new Map<TrailId, Map<ProbeId, Probe>>();
+  const order: TrailId[] = [];
+  for await (const probe of finalProbes(source, options)) {
+    let bucket = probesByTrail.get(probe.trailId);
+    if (bucket === undefined) {
+      bucket = new Map();
+      probesByTrail.set(probe.trailId, bucket);
+      order.push(probe.trailId);
+    }
+    bucket.set(probe.id, probe);
+  }
+  return order.map((trailId) => buildTrail(trailId, probesByTrail.get(trailId) ?? new Map()));
+}

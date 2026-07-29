@@ -9,7 +9,24 @@
  * {@link PreferenceStore} reader/writer. Console surfaces and boot stages depend
  * on this module rather than reaching into the individual files.
  */
-export type { Preferences, SettingKey, EscapeAction, DeliveryMode, ThinkingLevel, PermissionMode, PermissionSettings, } from "./contract";
-export { DEFAULT_PREFERENCES, SETTING_KEYS, ESCAPE_ACTIONS, isEscapeAction, DELIVERY_MODES, isDeliveryMode, PERMISSION_MODES, isPermissionMode, } from "./contract";
-export { PreferenceStore } from "./manager";
-export type { PreferenceLocations } from "./manager";
+export type {
+  Preferences,
+  SettingKey,
+  EscapeAction,
+  DeliveryMode,
+  ThinkingLevel,
+  PermissionMode,
+  PermissionSettings,
+} from "./contract.js";
+export {
+  DEFAULT_PREFERENCES,
+  SETTING_KEYS,
+  ESCAPE_ACTIONS,
+  isEscapeAction,
+  DELIVERY_MODES,
+  isDeliveryMode,
+  PERMISSION_MODES,
+  isPermissionMode,
+} from "./contract.js";
+export { PreferenceStore } from "./manager.js";
+export type { PreferenceLocations } from "./manager.js";

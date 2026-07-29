@@ -10,8 +10,24 @@
  * {@link RuntimeBroker} and annotate catalog cards via this barrel rather than
  * reaching into the individual modules.
  */
-export { claudeCliBridge } from "./claude-cli";
-export { codexCliBridge } from "./codex-cli";
-export { indusagiCliBridge, makeIndusagiCliBridge } from "./indusagi-cli";
-export { BUILTIN_RUNTIME_SPECS, BUILTIN_ADAPTERS, builtinRuntimeSpec, annotateCard, withRuntimeEndpoint, specFromModel, type RuntimeAnnotatedModel, } from "./builtins";
-export { driveExchange, seedFromModel, asRecord, strField, errorText, type ChildParser, type ParseStep, } from "./_drive";
+export { claudeCliBridge } from "./claude-cli.js";
+export { codexCliBridge } from "./codex-cli.js";
+export { indusagiCliBridge, makeIndusagiCliBridge } from "./indusagi-cli.js";
+export {
+  BUILTIN_RUNTIME_SPECS,
+  BUILTIN_ADAPTERS,
+  builtinRuntimeSpec,
+  annotateCard,
+  withRuntimeEndpoint,
+  specFromModel,
+  type RuntimeAnnotatedModel,
+} from "./builtins.js";
+export {
+  driveExchange,
+  seedFromModel,
+  asRecord,
+  strField,
+  errorText,
+  type ChildParser,
+  type ParseStep,
+} from "./_drive.js";

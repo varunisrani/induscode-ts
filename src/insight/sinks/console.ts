@@ -1,38 +1,64 @@
-// @ts-nocheck
-// Type declarations recovered from dist/types (no runtime body)
 /**
  * Console sink — drains signals to a writable, one human-readable line each.
- *
- * The simplest terminal {@link Sink}: it pulls the {@link SignalStream} and
- * prints a compact line per signal — phase, kind, name, ids, and (on close) the
- * outcome and duration. Open and update lines are dimmed; close lines are
- * coloured by outcome. Colour is opt-in and degrades to plain text when the
- * target is not a TTY, so piping the output stays clean.
- *
- * The writer is injected (defaulting to `process.stdout`) so tests can capture
- * lines without touching the real terminal.
  */
-import { Sink } from "../contract";
-/** The minimal writable face the console sink needs. */
+import type { Sink } from "../contract.js";
+
 export interface LineWriter {
-    /** Append a chunk; the sink always supplies a newline-terminated line. */
-    write(chunk: string): unknown;
-    /** Whether the target is an interactive terminal (enables colour). */
-    readonly isTTY?: boolean;
+  write(chunk: string): unknown;
+  readonly isTTY?: boolean;
 }
-/** Construction options for {@link createConsoleSink}. */
+
 export interface ConsoleSinkOptions {
-    /** Where lines go; defaults to `process.stdout`. */
-    readonly writer?: LineWriter;
-    /** Force colour on/off; defaults to the writer's TTY state. */
-    readonly color?: boolean;
-    /** Sink id; defaults to `"console"`. */
-    readonly id?: string;
+  readonly writer?: LineWriter;
+  readonly color?: boolean;
+  readonly id?: string;
 }
-/**
- * Build a {@link Sink} that prints each signal as one line.
- *
- * @param options see {@link ConsoleSinkOptions}
- * @returns a console {@link Sink}
- */
-export declare function createConsoleSink(options?: ConsoleSinkOptions): Sink;
+
+const SGR = {
+  reset: "\x1B[0m",
+  dim: "\x1B[2m",
+  green: "\x1B[32m",
+  red: "\x1B[31m",
+  cyan: "\x1B[36m",
+};
+
+function paint(on: boolean, code: string, text: string): string {
+  return on ? code + text + SGR.reset : text;
+}
+
+function label(probe: { kind: string; name: string }): string {
+  return probe.kind + "/" + probe.name;
+}
+
+function formatSignal(
+  signal: import("../contract.js").Signal,
+  color: boolean,
+): string {
+  const p = signal.probe;
+  const ids = p.trailId.slice(0, 8) + ":" + p.id.slice(0, 6);
+  if (signal.phase === "close") {
+    const closed = p;
+    const ms = (closed.endedAt ?? 0) - closed.startedAt;
+    const ok = closed.status === "ok";
+    const tag = paint(color, ok ? SGR.green : SGR.red, closed.status);
+    const dur = paint(color, SGR.dim, `${ms}ms`);
+    return `close ${tag} ${label(closed)} ${dur} ${ids}`;
+  }
+  const head = paint(color, SGR.cyan, signal.phase);
+  const body = paint(color, SGR.dim, `${label(p)} ${ids}`);
+  return `${head} ${body}`;
+}
+
+export function createConsoleSink(options: ConsoleSinkOptions = {}): Sink {
+  const writer: LineWriter = options.writer ?? (process.stdout as unknown as LineWriter);
+  const color = options.color ?? writer.isTTY ?? false;
+  const id = options.id ?? "console";
+  return {
+    id,
+    async drain(stream) {
+      for await (const signal of stream) {
+        writer.write(formatSignal(signal, color) + "\n");
+      }
+    },
+  };
+}

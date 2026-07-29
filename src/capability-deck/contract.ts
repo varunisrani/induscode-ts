@@ -1,5 +1,3 @@
-// @ts-nocheck
-// Type declarations recovered from dist/types (no runtime body)
 /**
  * Capability-deck contract — the FROZEN type surface of the tooling layer.
  *
@@ -38,11 +36,32 @@
  *
  * The deck never re-declares these; it composes them.
  */
-import type { AgentTool, AgentToolResult } from "indusagi/agent";
-import type { ToolBox } from "indusagi/runtime";
+// Local aliases for framework vocabulary that is not exported from the
+// `indusagi` package. Kept loose (`unknown` payload) so deck consumers can
+// thread framework-supplied values through without a parallel descriptor type.
+/** The framework `AgentTool` shape (name, description, parameters, execute). */
 import type { Static, TSchema } from "@sinclair/typebox";
+export type AgentTool<TParameters = unknown, TDetails = unknown> = {
+    name: string;
+    label?: string;
+    description?: string;
+    parameters?: TParameters;
+    readOnly?: boolean;
+    execute?: (...args: unknown[]) => unknown;
+    [k: string]: unknown;
+};
+/** The framework `AgentToolResult` (content parts + details). */
+export type AgentToolResult<TDetails = unknown> = {
+    content: readonly unknown[];
+    details?: TDetails;
+    [k: string]: unknown;
+};
+/** Opaque handle to a framework tool box. */
+export type ToolBox = { [k: string]: unknown };
+
 /** Re-exported framework vocabulary that deck consumers routinely need. */
-export type { AgentTool, AgentToolResult, ToolBox, TSchema, Static };
+export type { TSchema, Static };
+
 /**
  * A single callable tool the deck manages.
  *
@@ -57,7 +76,9 @@ export type { AgentTool, AgentToolResult, ToolBox, TSchema, Static };
  * `TParameters` is left open (`TSchema`) so heterogeneous capabilities with
  * different parameter schemas coexist in one `Capability[]`.
  */
-export type Capability<TParameters extends TSchema = TSchema, TDetails = unknown> = AgentTool<TParameters, TDetails>;
+export type Capability<TParameters extends TSchema = TSchema, TDetails = unknown> =
+    AgentTool<TParameters, TDetails>;
+
 /**
  * A capability whose parameter/detail types are erased — the element type of a
  * heterogeneous deck.
@@ -67,6 +88,7 @@ export type Capability<TParameters extends TSchema = TSchema, TDetails = unknown
  * {@link ToolDeck.tools} / {@link ToolDeck.box} surface in.
  */
 export type AnyCapability = Capability<TSchema, unknown>;
+
 /**
  * String-branded stable identifier for a capability.
  *
@@ -78,13 +100,17 @@ export type AnyCapability = Capability<TSchema, unknown>;
 export type CapabilityId = string & {
     readonly __capability: unique symbol;
 };
+
 /**
  * Brand a raw string as a {@link CapabilityId}. The single sanctioned way to
  * produce one, so id provenance stays uniform across the catalog and bridge.
  *
  * @param raw the wire-facing tool name to brand
  */
-export declare function capabilityId(raw: string): CapabilityId;
+export function capabilityId(raw: string): CapabilityId {
+    return raw as CapabilityId;
+}
+
 /**
  * One row of the static capability catalog — the deck's single source of truth.
  *
@@ -113,6 +139,7 @@ export interface CapabilityCard {
      */
     build(ctx: DeckContext): Capability;
 }
+
 /**
  * The set of capabilities a card is eligible for, by profile.
  *
@@ -122,6 +149,7 @@ export interface CapabilityCard {
  * every card and need not be listed.
  */
 export type CardProfiles = readonly DeckProfile[];
+
 /**
  * The named capability sets a session can be provisioned with — the profile
  * table that replaces a trio of near-identical build functions.
@@ -135,6 +163,7 @@ export type CardProfiles = readonly DeckProfile[];
  *     interactive coding session runs with.
  */
 export type DeckProfile = "authoring" | "survey" | "all";
+
 /**
  * The working context handed to {@link CapabilityCard.build}.
  *
@@ -154,6 +183,7 @@ export interface DeckContext {
     /** Opaque framework handles a capability may need (model registry, stores). */
     readonly framework?: DeckFrameworkHandles;
 }
+
 /**
  * Filesystem backend port a capability may bind to.
  *
@@ -165,6 +195,7 @@ export interface DeckContext {
 export type DeckFsBackend = {
     readonly __deckFsBackend: unique symbol;
 };
+
 /**
  * Shell backend port a capability may bind to. Opaque for the same reason as
  * {@link DeckFsBackend}: a branded handle the contract threads but never reads.
@@ -172,6 +203,7 @@ export type DeckFsBackend = {
 export type DeckShellBackend = {
     readonly __deckShellBackend: unique symbol;
 };
+
 /**
  * A bag of opaque framework handles the novel capabilities wire to — the
  * subagent/delegate manager, the checklist ledger, the background-process
@@ -181,6 +213,7 @@ export type DeckShellBackend = {
 export interface DeckFrameworkHandles {
     readonly [name: string]: unknown;
 }
+
 /**
  * The stable key of an enrolled bridge capability.
  *
@@ -193,8 +226,12 @@ export interface DeckFrameworkHandles {
 export type BridgeKey = string & {
     readonly __bridgeKey: unique symbol;
 };
+
 /** Brand a raw string as a {@link BridgeKey}. */
-export declare function bridgeKey(raw: string): BridgeKey;
+export function bridgeKey(raw: string): BridgeKey {
+    return raw as BridgeKey;
+}
+
 /**
  * The operations the MCP enrollment stream records.
  *
@@ -204,6 +241,7 @@ export declare function bridgeKey(raw: string): BridgeKey;
  *     splice: the keyed entry is removed from the reduced view).
  */
 export type BridgeOp = "enroll" | "retire";
+
 /**
  * A single append-only event in the MCP enrollment stream.
  *
@@ -227,6 +265,7 @@ export interface BridgeEntry {
     /** ISO-8601 timestamp the event was appended. */
     readonly at: string;
 }
+
 /**
  * The reduced, current view of the MCP enrollment ledger.
  *
@@ -243,6 +282,7 @@ export interface LedgerSnapshot {
     /** The highest {@link BridgeEntry.seq} folded into this snapshot. */
     readonly highWater: number;
 }
+
 /**
  * Fold an append-only {@link BridgeEntry} stream into its current
  * {@link LedgerSnapshot}.
@@ -254,7 +294,29 @@ export interface LedgerSnapshot {
  *
  * @param entries the enrollment events to fold, in any order
  */
-export declare function reduceLedger(entries: readonly BridgeEntry[]): LedgerSnapshot;
+export function reduceLedger(entries: readonly BridgeEntry[]): LedgerSnapshot {
+    const ordered = [...entries].sort((a, b) => a.seq - b.seq);
+    const live = new Map<BridgeKey, AnyCapability>();
+    let highWater = 0;
+    for (const entry of ordered) {
+        if (entry.seq > highWater) highWater = entry.seq;
+        if (entry.op === "enroll") {
+            if (entry.capability !== undefined) live.set(entry.key, entry.capability);
+        } else {
+            live.delete(entry.key);
+        }
+    }
+    const keyServer = new Map<BridgeKey, string>();
+    for (const entry of ordered) keyServer.set(entry.key, entry.server);
+    const byServer = new Map<string, number>();
+    for (const key of live.keys()) {
+        const server = keyServer.get(key);
+        if (server === undefined) continue;
+        byServer.set(server, (byServer.get(server) ?? 0) + 1);
+    }
+    return { live, byServer, highWater };
+}
+
 /**
  * The assembled capability deck a session runs against.
  *
@@ -275,6 +337,7 @@ export interface ToolDeck {
     /** The consumable surface the conductor (or runtime) wires in as its tools. */
     box(): DeckBox;
 }
+
 /**
  * What {@link ToolDeck.box} hands to a consumer.
  *
@@ -284,6 +347,7 @@ export interface ToolDeck {
  * protocol bridge, which yields a `ToolBox` — can consume the deck the same way.
  */
 export type DeckBox = AnyCapability[] | ToolBox;
+
 /**
  * The closed set of failure categories the deck can surface during
  * provisioning or bridge enrollment.
@@ -294,6 +358,7 @@ export type DeckBox = AnyCapability[] | ToolBox;
  *   - `backend`            — a required injected backend was missing or invalid.
  */
 export type DeckFaultKind = "unknown_capability" | "build_failed" | "bridge" | "backend";
+
 /**
  * A typed, discriminated failure raised by the deck.
  *
@@ -309,6 +374,7 @@ export interface DeckFault {
     /** Underlying error or structured detail, if any. */
     readonly cause?: unknown;
 }
+
 /**
  * Construct a {@link DeckFault}. The single sanctioned way to mint one, so the
  * shape stays uniform across every producer.
@@ -317,4 +383,6 @@ export interface DeckFault {
  * @param message a human-readable, single-line summary
  * @param cause   optional underlying error or structured detail
  */
-export declare function deckFault(kind: DeckFaultKind, message: string, cause?: unknown): DeckFault;
+export function deckFault(kind: DeckFaultKind, message: string, cause?: unknown): DeckFault {
+    return cause === undefined ? { kind, message } : { kind, message, cause };
+}

@@ -11,13 +11,13 @@
  * runner backed by a fresh framework `Agent`, the `tool_update` product signal,
  * and `APP_NOVEL_CARDS` registration) live in stage 2 and consume these exports.
  */
-export type { ParsedWorkflow, WorkflowMeta, WorkflowMetaPhase, } from "./parse";
-export { NONDETERMINISM_ERROR, parseWorkflowScript } from "./parse";
-export type { StructuredOutputCapture, StructuredOutputToolOptions, } from "./structured-output";
-export { createStructuredOutputTool } from "./structured-output";
-export type { WorkflowAgentSnapshot, WorkflowAgentStatus, WorkflowDisplayOptions, WorkflowSnapshot, } from "./display";
-export { createWorkflowSnapshot, preview, recomputeWorkflowSnapshot, renderWorkflowLines, renderWorkflowText, } from "./display";
-export type { AgentOptions, WorkflowAgentActivity, WorkflowAgentRunner, WorkflowAgentRunOptions, WorkflowRunOptions, WorkflowRunResult, } from "./engine";
-export { runWorkflow } from "./engine";
-export type { WorkflowAgentRunnerOptions, WorkflowSubAgent, WorkflowSpawnContext, } from "./agent-runner";
-export { createWorkflowAgentRunner } from "./agent-runner";
+export type { ParsedWorkflow, WorkflowMeta, WorkflowMetaPhase, } from "./parse.js";
+export { NONDETERMINISM_ERROR, parseWorkflowScript } from "./parse.js";
+export type { StructuredOutputCapture, StructuredOutputToolOptions, } from "./structured-output.js";
+export { createStructuredOutputTool } from "./structured-output.js";
+export type { WorkflowAgentSnapshot, WorkflowAgentStatus, WorkflowDisplayOptions, WorkflowSnapshot, } from "./display.js";
+export { createWorkflowSnapshot, preview, recomputeWorkflowSnapshot, renderWorkflowLines, renderWorkflowText, } from "./display.js";
+export type { AgentOptions, WorkflowAgentActivity, WorkflowAgentRunner, WorkflowAgentRunOptions, WorkflowRunOptions, WorkflowRunResult, } from "./engine.js";
+export { runWorkflow } from "./engine.js";
+export type { WorkflowAgentRunnerOptions, WorkflowSubAgent, WorkflowSpawnContext, } from "./agent-runner.js";
+export { createWorkflowAgentRunner } from "./agent-runner.js";

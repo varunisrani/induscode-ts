@@ -17,10 +17,85 @@
  * land; consumers import the channel surface from `src/channels` rather than
  * reaching into individual modules.
  */
-export type { ProtocolVersion, RequestId, OpRequest, OpError, ReplyOk, ReplyErr, Reply, WritableLine, ReadableChunks, EncodeLine, DecodeLines, NdjsonFramer, Ask, AskAnswer, Tell, DialogBridge, ChannelContext, Op, OpRegistry, OpParams, OpResult, LinkDriver, LinkSnapshot, Signal, OneshotShape, OneshotRequest, OneshotStrategy, ChannelTimings, DriverOptions, ServerOptions, ImageContent, SessionConductor, ConductorState, ThinkingLevel, Usage, } from "./contract";
-export { PROTOCOL_VERSION, OP_ERROR, REQUEST_ID_PREFIX, DEFAULT_CHANNEL_TIMINGS, isReplyOk, defineOps, } from "./contract";
-export { encodeLine, decodeLines, ndjsonFramer } from "./framer";
-export { dispatch, hasOp, methodsOf, buildOps, UnknownOpError, type OpRegistryHandle, } from "./ops";
-export { runOneshot, inertDialog } from "./oneshot";
-export { SESSION_OPS, projectSnapshot, type SessionOps, type SubmitParams, type ResumeParams, type CycleModelParams, type ModelEntry, } from "./session-ops";
-export { createLinkServer, createLinkDriver, createDialogBridge, makeDialogMethods, DIALOG_TABLE, LinkRequestError, type LinkServer, type LinkServerIo, type LinkServerConfig, type LinkDriverHandle, type LinkDriverIo, type LinkDriverConfig, type LinkedDialogBridge, type DialogBridgeDeps, type DialogSpec, type DialogMethods, } from "./link";
+export type {
+  ProtocolVersion,
+  RequestId,
+  OpRequest,
+  OpError,
+  ReplyOk,
+  ReplyErr,
+  Reply,
+  WritableLine,
+  ReadableChunks,
+  EncodeLine,
+  DecodeLines,
+  NdjsonFramer,
+  Ask,
+  AskAnswer,
+  Tell,
+  DialogBridge,
+  ChannelContext,
+  Op,
+  OpRegistry,
+  OpParams,
+  OpResult,
+  LinkDriver,
+  LinkSnapshot,
+  Signal,
+  OneshotShape,
+  OneshotRequest,
+  OneshotStrategy,
+  ChannelTimings,
+  DriverOptions,
+  ServerOptions,
+  ImageContent,
+  SessionConductor,
+  ConductorState,
+  ThinkingLevel,
+  Usage,
+} from "./contract.js";
+export {
+  PROTOCOL_VERSION,
+  OP_ERROR,
+  REQUEST_ID_PREFIX,
+  DEFAULT_CHANNEL_TIMINGS,
+  isReplyOk,
+  defineOps,
+} from "./contract.js";
+export { encodeLine, decodeLines, ndjsonFramer } from "./framer.js";
+export {
+  dispatch,
+  hasOp,
+  methodsOf,
+  buildOps,
+  UnknownOpError,
+  type OpRegistryHandle,
+} from "./ops.js";
+export { runOneshot, inertDialog } from "./oneshot.js";
+export {
+  SESSION_OPS,
+  projectSnapshot,
+  type SessionOps,
+  type SubmitParams,
+  type ResumeParams,
+  type CycleModelParams,
+  type ModelEntry,
+} from "./session-ops.js";
+export {
+  createLinkServer,
+  createLinkDriver,
+  createDialogBridge,
+  makeDialogMethods,
+  DIALOG_TABLE,
+  LinkRequestError,
+  type LinkServer,
+  type LinkServerIo,
+  type LinkServerConfig,
+  type LinkDriverHandle,
+  type LinkDriverIo,
+  type LinkDriverConfig,
+  type LinkedDialogBridge,
+  type DialogBridgeDeps,
+  type DialogSpec,
+  type DialogMethods,
+} from "./link/index.js";

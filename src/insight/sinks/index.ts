@@ -13,6 +13,12 @@
  *
  * All four are framework-agnostic and share the record format in `serialize.ts`.
  */
-export { createConsoleSink, type ConsoleSinkOptions, type LineWriter, } from "./console";
-export { createFileSink, type FileSinkOptions, } from "./file";
-export { createStreamSink, createCollectorSink, type StreamSinkOptions, type SignalWriter, type CollectorSink, } from "./stream";
+export { createConsoleSink, type ConsoleSinkOptions, type LineWriter } from "./console.js";
+export { createFileSink, type FileSinkOptions } from "./file.js";
+export {
+  createStreamSink,
+  createCollectorSink,
+  type StreamSinkOptions,
+  type SignalWriter,
+  type CollectorSink,
+} from "./stream.js";

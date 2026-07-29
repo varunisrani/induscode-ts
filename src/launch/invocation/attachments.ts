@@ -1,74 +1,179 @@
-// @ts-nocheck
-// Type declarations recovered from dist/types (no runtime body)
 /**
  * The attachment gatherer — expands `@file` references into one
  * {@link Attachments} value.
- *
- * Each `@file` token collected by the reader is resolved through the framework
- * path resolver ({@link resolveReadPath}, which handles `~` expansion and the
- * cwd), classified by extension, and folded into the result:
- *
- *   - **text files** are read as UTF-8 and inlined into {@link Attachments.prose}
- *     wrapped in a delimited block keyed by the resolved path, so the model sees
- *     which file each block came from;
- *   - **image files** are read as bytes, base64-encoded, and collected as
- *     framework {@link ImageContent} in {@link Attachments.media}.
- *
- * Guard rails:
- *   - an unknown extension, an oversized file, a missing file, or a read error
- *     raises a typed {@link AttachmentError} (with a {@link AttachmentErrorKind}
- *     discriminant) rather than a string or a process exit;
- *   - size caps bound the inlined text and the decoded image before either is
- *     materialised onto the message;
- *   - an empty file is skipped silently — it contributes neither prose nor media.
- *
- * The `@file` syntax, the extension classification, and base64 image attachment
- * are kept behaviours; only the typed-error model and the explicit caps are
- * owned here.
  */
-import type { Attachments, AttachmentOptions } from "../contract";
-/**
- * The closed set of attachment failure categories. A consumer switches on
- * {@link AttachmentError.kind}, never on message text:
- *
- *   - `unsupported`  — the file extension is neither text nor image.
- *   - `too-large`    — the file exceeds its kind's size cap.
- *   - `not-found`    — the resolved path does not exist.
- *   - `read-failed`  — the file could not be read or stat-ed.
- */
+import { readFile, stat } from "node:fs/promises";
+import { extname } from "node:path";
+import type { ImageContent } from "indusagi/ai";
+import { resolveReadPath } from "indusagi/agent";
+import type { Attachments, AttachmentOptions } from "../contract.js";
+
+const MAX_TEXT_BYTES = 10 * 1024 * 1024;
+const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
+
+const TEXT_EXTENSIONS: ReadonlySet<string> = new Set([
+  ".txt",
+  ".md",
+  ".markdown",
+  ".json",
+  ".jsonc",
+  ".yaml",
+  ".yml",
+  ".toml",
+  ".ini",
+  ".csv",
+  ".tsv",
+  ".xml",
+  ".html",
+  ".htm",
+  ".css",
+  ".scss",
+  ".ts",
+  ".tsx",
+  ".js",
+  ".jsx",
+  ".mjs",
+  ".cjs",
+  ".py",
+  ".rb",
+  ".go",
+  ".rs",
+  ".java",
+  ".kt",
+  ".c",
+  ".h",
+  ".cc",
+  ".cpp",
+  ".hpp",
+  ".cs",
+  ".php",
+  ".sh",
+  ".bash",
+  ".zsh",
+  ".sql",
+  ".log",
+  ".env",
+  ".gitignore",
+  ".dockerfile",
+]);
+
+const IMAGE_MIME_BY_EXT: ReadonlyMap<string, string> = new Map([
+  [".png", "image/png"],
+  [".jpg", "image/jpeg"],
+  [".jpeg", "image/jpeg"],
+  [".gif", "image/gif"],
+  [".webp", "image/webp"],
+  [".bmp", "image/bmp"],
+  [".svg", "image/svg+xml"],
+]);
+
 export type AttachmentErrorKind = "unsupported" | "too-large" | "not-found" | "read-failed";
-/**
- * A typed `@file` expansion failure. Carries the offending reference and the
- * resolved path for diagnostics; {@link cause} preserves any wrapped error.
- */
-export declare class AttachmentError extends Error {
-    /** The failure category (the discriminant). */
-    readonly kind: AttachmentErrorKind;
-    /** The raw `@file` reference as supplied on the command line. */
-    readonly reference: string;
-    /** The resolved absolute path, when resolution succeeded. */
-    readonly resolvedPath?: string;
-    /** The wrapped underlying error, if any. */
-    readonly cause?: unknown;
-    constructor(kind: AttachmentErrorKind, message: string, detail: {
-        reference: string;
-        resolvedPath?: string;
-        cause?: unknown;
-    });
+
+export class AttachmentError extends Error {
+  readonly kind: AttachmentErrorKind;
+  readonly reference: string;
+  readonly resolvedPath?: string;
+  readonly cause?: unknown;
+
+  constructor(
+    kind: AttachmentErrorKind,
+    message: string,
+    detail: { reference: string; resolvedPath?: string; cause?: unknown },
+  ) {
+    super(message);
+    this.name = "AttachmentError";
+    this.kind = kind;
+    this.reference = detail.reference;
+    if (detail.resolvedPath !== undefined) this.resolvedPath = detail.resolvedPath;
+    if (detail.cause !== undefined) this.cause = detail.cause;
+  }
 }
+
+function extensionOf(path: string): string {
+  return extname(path).toLowerCase();
+}
+
+function isMissing(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    (error as { code?: unknown }).code === "ENOENT"
+  );
+}
+
+async function sizeOf(resolvedPath: string, reference: string): Promise<number> {
+  try {
+    const info = await stat(resolvedPath);
+    return info.size;
+  } catch (error) {
+    if (isMissing(error)) {
+      throw new AttachmentError("not-found", `No such file: ${reference}`, {
+        reference,
+        resolvedPath,
+        cause: error,
+      });
+    }
+    throw new AttachmentError("read-failed", `Could not access file: ${reference}`, {
+      reference,
+      resolvedPath,
+      cause: error,
+    });
+  }
+}
+
+function wrapTextBlock(resolvedPath: string, body: string): string {
+  return `<file path="${resolvedPath}">\n${body}\n</file>`;
+}
+
 /**
  * Expand the `@file` references into a single {@link Attachments} value.
- *
- * Resolves each reference against {@link AttachmentOptions.cwd} via the framework
- * resolver, classifies it by extension, enforces the per-kind size cap, and
- * appends either a text block to the prose or an {@link ImageContent} to the
- * media. References list is taken in order; the prose blocks are joined with a
- * blank line between them. An empty references list yields an empty
- * {@link Attachments} (the caller decides whether to attach it at all).
- *
- * @param references the raw `@file` paths (without the leading `@`)
- * @param options    the cwd the references resolve against
- * @throws AttachmentError on an unsupported extension, an oversized file, a
- *         missing file, or a read failure
  */
-export declare function gatherAttachments(references: readonly string[], options: AttachmentOptions): Promise<Attachments>;
+export async function gatherAttachments(
+  references: readonly string[],
+  options: AttachmentOptions,
+): Promise<Attachments> {
+  const blocks: string[] = [];
+  const media: ImageContent[] = [];
+  for (const reference of references) {
+    const resolvedPath = resolveReadPath(reference, options.cwd);
+    const ext = extensionOf(resolvedPath);
+    const imageMime = IMAGE_MIME_BY_EXT.get(ext);
+    const isText = TEXT_EXTENSIONS.has(ext);
+    if (imageMime === undefined && !isText) {
+      throw new AttachmentError("unsupported", `Unsupported attachment type: ${reference}`, {
+        reference,
+        resolvedPath,
+      });
+    }
+    const size = await sizeOf(resolvedPath, reference);
+    if (size === 0) continue;
+    const cap = imageMime !== undefined ? MAX_IMAGE_BYTES : MAX_TEXT_BYTES;
+    if (size > cap) {
+      throw new AttachmentError("too-large", `Attachment exceeds the size limit: ${reference}`, {
+        reference,
+        resolvedPath,
+      });
+    }
+    try {
+      if (imageMime !== undefined) {
+        const bytes = await readFile(resolvedPath);
+        media.push({
+          type: "image",
+          data: bytes.toString("base64"),
+          mimeType: imageMime,
+        });
+      } else {
+        const body = await readFile(resolvedPath, "utf8");
+        if (body.length > 0) blocks.push(wrapTextBlock(resolvedPath, body));
+      }
+    } catch (error) {
+      throw new AttachmentError("read-failed", `Could not read file: ${reference}`, {
+        reference,
+        resolvedPath,
+        cause: error,
+      });
+    }
+  }
+  return { prose: blocks.join("\n\n"), media };
+}

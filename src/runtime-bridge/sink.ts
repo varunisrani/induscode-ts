@@ -1,61 +1,180 @@
-// @ts-nocheck
-// Type declarations recovered from dist/types (no runtime body)
 /**
- * The single {@link BridgeEventSink} implementation — the one place the
- * imperative push-stream idiom every bridge shares is written down.
- *
- * Each external runtime emits its own wire dialect; a bridge's parser maps that
- * dialect onto the provider-neutral {@link NormalizedEvent} union and drives a
- * sink. This module owns everything else:
- *
- *   - the accumulating {@link AssistantMessage} `partial` that every framework
- *     event carries (built in-place exactly like the framework's own producers,
- *     so a runtime-backed turn is indistinguishable from a network turn to the
- *     consumer);
- *   - the content-block index bookkeeping (a block's index is its position in
- *     `partial.content`, opened lazily on first emission of its kind);
- *   - the lazily-started lifecycle (`start` is implicit on first emission, and
- *     idempotent) and the terminal `finishSuccess` / `finishError` settle;
- *   - the `NormalizedEvent -> framework event` mapping, in {@link emit}, so the
- *     per-bridge code stays a pure parser.
- *
- * The framework push surface this writes through —
- * `pushStart / pushTextStart / pushTextDelta / pushTextEnd /
- *  pushThinkingStart / pushThinkingDelta / pushThinkingEnd /
- *  pushToolCallStart / pushToolCallDelta / pushToolCallEnd /
- *  pushDone / pushError` on {@link AssistantMessageEventStream} — is consumed
- * verbatim from the framework; this module never re-derives event shapes.
- *
- * Streaming contract honored (matching the framework's own adapters): a text or
- * thinking block opens with a `*_start` once the block has been appended to
- * `partial.content`, streams `*_delta`s while the running content accumulates
- * in-place, and closes with a `*_end` carrying the final content. A tool call is
- * a single self-contained block (`start -> delta(args) -> end`). The terminal
- * `done` / `error` event carries the fully-accumulated message.
+ * The single {@link BridgeEventSink} implementation.
  */
-import type { AssistantMessage, BridgeEventSink } from "./contract";
-/**
- * The model-identity fields stamped onto every `partial` {@link AssistantMessage}
- * the sink emits. A bridge supplies these from the bound {@link Model} so a
- * runtime-backed turn reports the same `api` / `provider` / `model` triple a
- * network turn would — keeping the accumulated message uniform regardless of
- * which path produced it.
- */
+import {
+  createAssistantMessageEventStream,
+  type AssistantMessage,
+  type Usage,
+} from "indusagi/ai";
+import type {
+  BridgeEventSink,
+  BridgeFailure,
+  FinishReason,
+  NormalizedEvent,
+  ToolCall,
+} from "./contract.js";
+
 export interface BridgeMessageSeed {
-    /** The bound model's `api` dialect identifier. */
-    readonly api: AssistantMessage["api"];
-    /** The bound model's provider slug. */
-    readonly provider: AssistantMessage["provider"];
-    /** The bound model's id (the value stamped into `AssistantMessage.model`). */
-    readonly model: string;
+  readonly api: AssistantMessage["api"];
+  readonly provider: AssistantMessage["provider"];
+  readonly model: string;
 }
+
+function zeroUsage(): Usage {
+  return {
+    input: 0,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    totalTokens: 0,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+  };
+}
+
+class BridgeSink implements BridgeEventSink {
+  readonly stream: ReturnType<typeof createAssistantMessageEventStream>;
+  partial: AssistantMessage;
+  open: { kind: "text" | "thinking"; index: number } | undefined;
+  started = false;
+  settled = false;
+
+  constructor(seed: BridgeMessageSeed) {
+    this.stream = createAssistantMessageEventStream();
+    this.partial = {
+      role: "assistant",
+      content: [],
+      api: seed.api,
+      provider: seed.provider,
+      model: seed.model,
+      usage: zeroUsage(),
+      stopReason: "stop",
+      timestamp: Date.now(),
+    };
+  }
+
+  start(): void {
+    if (this.started || this.settled) return;
+    this.started = true;
+    this.stream.pushStart(this.partial);
+  }
+
+  text(delta: string): void {
+    if (this.settled) return;
+    this.start();
+    const index = this.ensureOpen("text");
+    const block = this.partial.content[index];
+    if (block && block.type === "text") {
+      block.text += delta;
+    }
+    this.stream.pushTextDelta(index, delta, this.partial);
+  }
+
+  thinking(delta: string): void {
+    if (this.settled) return;
+    this.start();
+    const index = this.ensureOpen("thinking");
+    const block = this.partial.content[index];
+    if (block && block.type === "thinking") {
+      block.thinking += delta;
+    }
+    this.stream.pushThinkingDelta(index, delta, this.partial);
+  }
+
+  toolCall(call: ToolCall): void {
+    if (this.settled) return;
+    this.start();
+    this.closeOpen();
+    const index = this.partial.content.length;
+    const block = {
+      type: "toolCall" as const,
+      id: call.id,
+      name: call.name,
+      arguments: call.arguments,
+      ...(call.thoughtSignature !== undefined
+        ? { thoughtSignature: call.thoughtSignature }
+        : {}),
+    };
+    this.partial.content.push(block);
+    this.stream.pushToolCallStart(index, this.partial);
+    this.stream.pushToolCallDelta(index, JSON.stringify(block.arguments), this.partial);
+    this.stream.pushToolCallEnd(index, block, this.partial);
+  }
+
+  emit(event: NormalizedEvent): void {
+    switch (event.kind) {
+      case "text":
+        this.text(event.delta);
+        return;
+      case "thinking":
+        this.thinking(event.delta);
+        return;
+      case "tool_call":
+        this.toolCall(event.call);
+        return;
+      case "resume":
+        return;
+      case "finish":
+        this.finishSuccess(event.reason);
+        return;
+      case "failed":
+        this.finishError(event.error);
+        return;
+    }
+  }
+
+  finishSuccess(reason: FinishReason = "stop"): void {
+    if (this.settled) return;
+    this.start();
+    this.closeOpen();
+    this.settled = true;
+    this.partial.stopReason = reason;
+    this.stream.pushDone(reason, this.partial);
+  }
+
+  finishError(error: BridgeFailure): void {
+    if (this.settled) return;
+    this.start();
+    this.closeOpen();
+    this.settled = true;
+    const reason = error.aborted ? "aborted" : "error";
+    this.partial.stopReason = reason;
+    this.partial.errorMessage = error.message;
+    this.stream.pushError(reason, this.partial);
+  }
+
+  private ensureOpen(kind: "text" | "thinking"): number {
+    if (this.open) {
+      if (this.open.kind === kind) return this.open.index;
+      this.closeOpen();
+    }
+    const index = this.partial.content.length;
+    if (kind === "text") {
+      this.partial.content.push({ type: "text", text: "" });
+      this.stream.pushTextStart(index, this.partial);
+    } else {
+      this.partial.content.push({ type: "thinking", thinking: "" });
+      this.stream.pushThinkingStart(index, this.partial);
+    }
+    this.open = { kind, index };
+    return index;
+  }
+
+  private closeOpen(): void {
+    const open = this.open;
+    if (!open) return;
+    this.open = undefined;
+    const block = this.partial.content[open.index];
+    if (open.kind === "text" && block && block.type === "text") {
+      this.stream.pushTextEnd(open.index, block.text, this.partial);
+    } else if (open.kind === "thinking" && block && block.type === "thinking") {
+      this.stream.pushThinkingEnd(open.index, block.thinking, this.partial);
+    }
+  }
+}
+
 /**
  * Construct a {@link BridgeEventSink} seeded with the bound model's identity.
- * The single sanctioned way a bridge obtains a sink: it creates one, drives it
- * with {@link NormalizedEvent}s (or the convenience emitters), and returns
- * {@link BridgeEventSink.stream}. The imperative push idiom lives entirely
- * inside the returned sink.
- *
- * @param seed the bound model's `api` / `provider` / `model` identity
  */
-export declare function createBridgeSink(seed: BridgeMessageSeed): BridgeEventSink;
+export function createBridgeSink(seed: BridgeMessageSeed): BridgeEventSink {
+  return new BridgeSink(seed);
+}

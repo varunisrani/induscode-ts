@@ -7,20 +7,20 @@
  * exposes each subsystem as a namespace for embedding or testing. The agent
  * depends only on the `indusagi` framework package.
  */
-export * as boot from "./boot";
-export * as workspace from "./workspace";
-export * as conductor from "./conductor";
-export * as windowBudget from "./window-budget";
-export * as capabilityDeck from "./capability-deck";
-export * as runtimeBridge from "./runtime-bridge";
-export * as addons from "./addons";
-export * as consoleUi from "./console";
-export * as channels from "./channels";
-export * as briefing from "./briefing";
-export * as transcriptExport from "./transcript-export";
-export * as launch from "./launch";
-export * as insight from "./insight";
-export * as kit from "./kit";
-export * as settings from "./settings";
-export * as sessions from "./sessions";
-export { VERSION } from "./workspace";
+export * as boot from "./boot.js";
+export * as workspace from "./workspace.js";
+export * as conductor from "./conductor.js";
+export * as windowBudget from "./window-budget.js";
+export * as capabilityDeck from "./capability-deck.js";
+export * as runtimeBridge from "./runtime-bridge.js";
+export * as addons from "./addons.js";
+export * as consoleUi from "./console.js";
+export * as channels from "./channels.js";
+export * as briefing from "./briefing.js";
+export * as transcriptExport from "./transcript-export.js";
+export * as launch from "./launch.js";
+export * as insight from "./insight.js";
+export * as kit from "./kit.js";
+export * as settings from "./settings.js";
+export * as sessions from "./sessions.js";
+export { VERSION } from "./workspace.js";

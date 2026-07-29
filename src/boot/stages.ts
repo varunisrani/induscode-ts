@@ -1,5 +1,3 @@
-// @ts-nocheck
-// Type declarations recovered from dist/types (no runtime body)
 /**
  * Boot stage pipeline — the ordered list of {@link Stage} transforms that turn a
  * bare {@link BootContext} (argv + workspace + brand) into a fully-resolved one
@@ -27,7 +25,11 @@
  *      selected runner can own the exit code). Kept in the list so the ordered
  *      pipeline reads as the full launch sequence.
  */
-import type { BootContext, Stage } from "./contract";
+import { tokenizeInvocation } from "./invocation.js";
+import { applyUpgrades } from "./upgrade/apply.js";
+import { ensureDirs } from "../workspace/locator.js";
+import type { BootContext, Stage } from "./contract.js";
+
 /**
  * Materialise the resolved workspace directories on disk.
  *
@@ -36,7 +38,14 @@ import type { BootContext, Stage } from "./contract";
  * later stages and runners can write into it. Returns the same context (the
  * workspace record is unchanged — only the filesystem side-effects happen here).
  */
-declare const locateWorkspace: Stage;
+const locateWorkspace: Stage = {
+  name: "locate-workspace",
+  apply(ctx) {
+    ensureDirs(ctx.workspace);
+    return ctx;
+  },
+};
+
 /**
  * Run any pending one-time profile upgrades, idempotently.
  *
@@ -44,14 +53,28 @@ declare const locateWorkspace: Stage;
  * that fails is reported and retried on a later launch, never aborting boot. The
  * context is returned unchanged (upgrades touch the filesystem, not the context).
  */
-declare const upgrade: Stage;
+const upgrade: Stage = {
+  name: "apply-upgrades",
+  async apply(ctx) {
+    await applyUpgrades(ctx.workspace);
+    return ctx;
+  },
+};
+
 /**
  * Parse `argv` into the typed {@link Invocation} and thread it onto the context.
  *
  * The initial context carries a placeholder invocation (the bootstrapper cannot
  * know the mode before parsing); this stage replaces it with the real parse.
  */
-declare const buildInvocation: Stage;
+const buildInvocation: Stage = {
+  name: "build-invocation",
+  apply(ctx) {
+    const invocation = tokenizeInvocation(ctx.argv);
+    return { ...ctx, invocation };
+  },
+};
+
 /**
  * Best-effort assembly of the startup resource graph.
  *
@@ -63,7 +86,37 @@ declare const buildInvocation: Stage;
  * resources object built from empty literals rather than failing the boot — the
  * shape is what later phases depend on, and they fill it in.
  */
-declare const resolveResources: Stage;
+const resolveResources: Stage = {
+  name: "resolve-resources",
+  async apply(ctx) {
+    const resources = await buildStartupResources();
+    return { ...ctx, resources };
+  },
+};
+
+async function buildStartupResources(): Promise<{ settings: unknown; auth: Record<string, unknown>; models: unknown }> {
+  const settings = await loadDefaultSettings();
+  const models = await loadModelRegistry();
+  return { settings, auth: {}, models };
+}
+
+async function loadDefaultSettings(): Promise<unknown> {
+  try {
+    const mod = await import("indusagi/shell-app");
+    return (mod as { DEFAULT_SETTINGS?: unknown }).DEFAULT_SETTINGS ?? {};
+  } catch {
+    return {};
+  }
+}
+
+async function loadModelRegistry(): Promise<unknown> {
+  const mod = (await import("indusagi/ai")) as { ModelRegistry?: unknown; modelRegistry?: unknown };
+  if (typeof mod.ModelRegistry === "function") {
+    return new (mod.ModelRegistry as new () => unknown)();
+  }
+  return mod.modelRegistry;
+}
+
 /**
  * Marker / tracing stage for runner selection.
  *
@@ -72,11 +125,24 @@ declare const resolveResources: Stage;
  * ordered pipeline a faithful description of the launch sequence and to give the
  * selection step a name for tracing. It returns the context unchanged.
  */
-declare const selectRunnerStage: Stage;
+const selectRunnerStage: Stage = {
+  name: "select-runner",
+  apply(ctx) {
+    return ctx;
+  },
+};
+
 /**
  * The launch pipeline, in execution order. Folded by {@link runStages}.
  */
-export declare const STAGES: readonly Stage[];
+export const STAGES: readonly Stage[] = [
+  locateWorkspace,
+  upgrade,
+  buildInvocation,
+  resolveResources,
+  selectRunnerStage,
+];
+
 /**
  * Fold an ordered list of {@link Stage} transforms over an immutable
  * {@link BootContext}.
@@ -90,5 +156,12 @@ export declare const STAGES: readonly Stage[];
  * @param stages  The ordered transforms to apply; defaults to {@link STAGES}.
  * @returns The fully-resolved context after every stage has run.
  */
-export declare function runStages(initial: BootContext, stages?: readonly Stage[]): Promise<BootContext>;
-export { locateWorkspace, upgrade, buildInvocation, resolveResources, selectRunnerStage, };
+export async function runStages(initial: BootContext, stages: readonly Stage[] = STAGES): Promise<BootContext> {
+  let ctx: BootContext = initial;
+  for (const stage of stages) {
+    ctx = await stage.apply(ctx);
+  }
+  return ctx;
+}
+
+export { locateWorkspace, upgrade, buildInvocation, resolveResources, selectRunnerStage };

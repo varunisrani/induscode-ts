@@ -1,108 +1,116 @@
-// @ts-nocheck
-// Type declarations recovered from dist/types (no runtime body)
-/**
- * Transcript serialization — the bridge between the conductor's on-disk
- * {@link TranscriptEntry} vocabulary and the framework's {@link AgentMessage}
- * shapes.
- *
- * Two distinct directions live here, and the split is deliberate:
- *
- *   1. **Conductor ⇄ conductor** — encoding a {@link TranscriptEntry} to/from a
- *      single NDJSON line in the `indus/transcript@1` format. This is the
- *      conductor's *own* envelope (`schema`/`id`/`prev`/`role`/`message`/`at`/
- *      `meta`). The store owns these field names; they are our own, not any
- *      framework-internal session schema.
- *
- *   2. **Conductor ⇄ framework** — projecting a transcript branch down to the
- *      `AgentMessage[]` the agent loop consumes, and (for migration) lifting a
- *      legacy framework session file *up* into transcript entries. Here we
- *      **delegate the actual message serialization to the framework**: the
- *      framework's published loader/context helpers know how to parse and resolve
- *      the legacy on-disk schema, and we keep those internal schema literals
- *      inside the framework package rather than re-declaring them in the app.
- *
- * The role discriminant on a {@link TranscriptEntry} is the conductor's own —
- * `role` here labels the *node*, not the LLM message. We derive it from the
- * carried {@link AgentMessage}'s `role` field so a round-trip is faithful, but
- * the transcript can also hold conductor-only nodes (`condense`, `note`) that the
- * framework message union has no direct counterpart for.
- */
+import { buildSessionContext, convertToLlm, loadEntriesFromFile, parseSessionEntries } from "indusagi/agent";
 import type { AgentMessage } from "indusagi/agent";
 import type { Message } from "indusagi/ai";
-import type { SessionHead, TranscriptEntry, TranscriptRole } from "../contract";
-/**
- * Derive the conductor's node {@link TranscriptRole} from a framework
- * {@link AgentMessage}.
- *
- * The framework message union uses `role` values (`user`/`assistant`/`toolResult`
- * plus the custom app messages). We fold those onto the transcript's own role
- * vocabulary. Anything we don't recognize (custom/notification-style messages)
- * is filed as a `note` node so it persists without claiming an LLM turn role.
- */
-export declare function roleForMessage(message: AgentMessage): TranscriptRole;
-/** Encode one {@link TranscriptEntry} to its NDJSON entry line (no newline). */
-export declare function encodeEntry(entry: TranscriptEntry): string;
-/** Encode the {@link SessionHead} to its NDJSON head line (no newline). */
-export declare function encodeHead(head: SessionHead): string;
-/** The result of parsing a whole session file: its head plus its entries. */
+import { TRANSCRIPT_SCHEMA } from "../contract.js";
+import type { SessionHead, TranscriptEntry, TranscriptRole } from "../contract.js";
+
 export interface ParsedSessionFile {
-    readonly head: SessionHead | null;
-    readonly entries: TranscriptEntry[];
+  readonly head: SessionHead | null;
+  readonly entries: TranscriptEntry[];
 }
-/**
- * Parse the raw text of a conductor session file into a head + entries.
- *
- * Tolerant by design: blank lines are skipped, malformed lines are dropped, and
- * lines whose `schema` does not match `indus/transcript@1` are ignored. The last
- * head line wins (a file should carry exactly one, written first and rewritten on
- * branch). Entries keep file order.
- */
-export declare function parseSessionText(sessionId: string, text: string): ParsedSessionFile;
-/**
- * Project a resolved transcript branch down to the framework `AgentMessage[]`
- * the agent loop consumes.
- *
- * The branch is the root→leaf node list (the store's reducer produces it). We
- * pull the carried `content` payloads and hand them straight to the agent; they
- * are already framework messages. Conductor-only nodes whose payload is not a
- * real message would be filtered by the framework's own `convertToLlm` at call
- * time, so we keep them here and let the loop's converter decide.
- */
-export declare function branchToMessages(branch: readonly TranscriptEntry[]): AgentMessage[];
-/**
- * Convert a transcript branch to *LLM-ready* `Message[]`, delegating entirely to
- * the framework's {@link convertToLlm}.
- *
- * This is the one place that must understand how each `AgentMessage` variant
- * (including the framework's custom `bashExecution`/`branchSummary`/… messages)
- * collapses into a plain LLM message — and that knowledge stays in the framework.
- * The conductor never re-implements it.
- */
-export declare function branchToLlmMessages(branch: readonly TranscriptEntry[]): Message[];
-/**
- * Lift a *legacy framework session file* into conductor {@link TranscriptEntry}
- * nodes, for one-way migration/import.
- *
- * The legacy file is the framework's own internal JSONL format. We do **not**
- * parse its schema ourselves — we call the framework's published loader (or its
- * in-memory text parser), then map only the message-bearing entries onto our
- * envelope. Every framework-internal schema literal stays behind that call.
- *
- * Non-message bookkeeping entries (model/thinking changes, labels, raw
- * compaction markers) are dropped from the imported transcript: their effect is
- * already folded into the resolved messages we keep, and the conductor tracks
- * model/thinking in its own state rather than as transcript nodes.
- */
-export declare function importLegacyFile(filePath: string): TranscriptEntry[];
-/** As {@link importLegacyFile}, but from already-loaded text (testing/import). */
-export declare function importLegacyText(text: string): TranscriptEntry[];
-/**
- * Resolve a legacy framework file straight to the `AgentMessage[]` of its active
- * branch, delegating to the framework's {@link buildSessionContext}.
- *
- * Useful when the goal is to *seed* a fresh conductor session from a legacy one
- * without reproducing its tree: the framework walks its own parent links and
- * applies its own compaction/branch-summary resolution, and we receive a flat
- * message list to re-append as new transcript nodes.
- */
-export declare function resolveLegacyMessages(filePath: string): AgentMessage[];
+
+export function roleForMessage(message: AgentMessage): TranscriptRole {
+  switch (message.role) {
+    case "user": return "user";
+    case "assistant": return "assistant";
+    case "toolResult": return "tool";
+    case "compactionSummary":
+    case "branchSummary": return "condense";
+    default: return "note";
+  }
+}
+
+export function encodeEntry(entry: TranscriptEntry): string {
+  return JSON.stringify({
+    schema: TRANSCRIPT_SCHEMA,
+    kind: "entry",
+    id: entry.id,
+    prev: entry.parent,
+    role: entry.role,
+    message: entry.content,
+    at: entry.createdAt,
+    ...(entry.meta !== undefined ? { meta: entry.meta } : {}),
+  });
+}
+
+export function encodeHead(head: SessionHead): string {
+  return JSON.stringify({
+    schema: TRANSCRIPT_SCHEMA,
+    kind: "head",
+    sessionId: head.sessionId,
+    leaf: head.leaf,
+    ...(head.usage !== undefined ? { usage: head.usage } : {}),
+  });
+}
+
+function isFileLine(value: unknown): value is any {
+  return typeof value === "object" && value !== null && (value as any).schema === TRANSCRIPT_SCHEMA
+    && ((value as any).kind === "head" || (value as any).kind === "entry");
+}
+
+export function parseSessionText(sessionId: string, text: string): ParsedSessionFile {
+  const entries: TranscriptEntry[] = [];
+  let leaf: string | null | undefined;
+  let usage: SessionHead["usage"];
+  for (const raw of text.split("\n")) {
+    const trimmed = raw.trim();
+    if (!trimmed) continue;
+    let parsed: unknown;
+    try { parsed = JSON.parse(trimmed); } catch { continue; }
+    if (!isFileLine(parsed)) continue;
+    if (parsed.kind === "head") {
+      leaf = parsed.leaf;
+      usage = parsed.usage;
+    } else {
+      entries.push({
+        id: parsed.id,
+        parent: parsed.prev,
+        role: parsed.role,
+        content: parsed.message,
+        createdAt: parsed.at,
+        ...(parsed.meta !== undefined ? { meta: parsed.meta } : {}),
+      });
+    }
+  }
+  return {
+    head: leaf === undefined ? null : { sessionId, leaf, ...(usage !== undefined ? { usage } : {}) },
+    entries,
+  };
+}
+
+export function branchToMessages(branch: readonly TranscriptEntry[]): AgentMessage[] {
+  return branch.map((entry) => entry.content);
+}
+
+export function branchToLlmMessages(branch: readonly TranscriptEntry[]): Message[] {
+  return convertToLlm(branchToMessages(branch)) as Message[];
+}
+
+function legacyEntriesToTranscript(entries: any[]): TranscriptEntry[] {
+  const messages = buildSessionContext(entries).messages as AgentMessage[];
+  let parent: string | null = null;
+  return messages.map((content, index) => {
+    const id = `legacy_${index.toString(36)}`;
+    const entry: TranscriptEntry = {
+      id,
+      parent,
+      role: roleForMessage(content),
+      content,
+      createdAt: new Date(0).toISOString(),
+    };
+    parent = id;
+    return entry;
+  });
+}
+
+export function importLegacyFile(filePath: string): TranscriptEntry[] {
+  return legacyEntriesToTranscript(loadEntriesFromFile(filePath) as any[]);
+}
+
+export function importLegacyText(text: string): TranscriptEntry[] {
+  return legacyEntriesToTranscript(parseSessionEntries(text) as any[]);
+}
+
+export function resolveLegacyMessages(filePath: string): AgentMessage[] {
+  return buildSessionContext(loadEntriesFromFile(filePath) as any[]).messages as AgentMessage[];
+}

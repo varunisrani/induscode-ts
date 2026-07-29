@@ -9,7 +9,7 @@
  * provisioning, and the read-before-edit / checkpoint stores). It deliberately
  * imports from the LEAF modules — never the root `src/index.ts` barrel — so a
  * consumer can pull in the guardrails without dragging in the Ink/React console
- * tree (`export * as consoleUi from "./console"` lives only on the root barrel).
+ * tree (`export * as consoleUi from "./console.js"` lives only on the root barrel).
  *
  * Reachable from a published install as `indusagi-coding-agent/guardrails`.
  */

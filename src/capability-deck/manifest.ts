@@ -1,5 +1,3 @@
-// @ts-nocheck
-// Type declarations recovered from dist/types (no runtime body)
 /**
  * Capability catalog — the deck's single source of truth.
  *
@@ -21,7 +19,30 @@
  * the profile table the provisioner consults — so the card shape stays the small
  * catalog row the contract froze.
  */
-import type { CapabilityCard, CapabilityId, CardProfiles } from "./contract";
+import { builtinDescriptors, type BuiltinDescriptor } from "./builtin-bridge.js";
+import {
+    capabilityId,
+    type CapabilityCard,
+    type CapabilityId,
+    type CardProfiles,
+    type DeckProfile,
+} from "./contract.js";
+
+/**
+ * Project a {@link BuiltinDescriptor} into the deck's catalog row shape.
+ *
+ * Built-in descriptors and capability cards share four fields; this keeps the
+ * manifest free of a parallel descriptor map by deriving cards from the bridge.
+ */
+function cardOf(descriptor: BuiltinDescriptor): CapabilityCard {
+    return {
+        id: descriptor.id,
+        title: descriptor.title,
+        summary: descriptor.summary,
+        build: descriptor.build,
+    };
+}
+
 /**
  * The static capability catalog — the deck's single source of truth.
  *
@@ -30,26 +51,42 @@ import type { CapabilityCard, CapabilityId, CardProfiles } from "./contract";
  * they land. Consumers never hand-build a parallel list — they read this array
  * (or the derived {@link CAPABILITY_INDEX} / {@link CARD_PROFILES} below).
  */
-export declare const CAPABILITY_CARDS: readonly CapabilityCard[];
+export const CAPABILITY_CARDS: readonly CapabilityCard[] = builtinDescriptors().map(cardOf);
+
 /**
  * The catalog keyed by wire-facing {@link CapabilityId}, derived from
  * {@link CAPABILITY_CARDS}. Resolves a `--tools name1,name2` selection or a
  * model-named tool to its card in O(1) without a second hand-maintained map.
  */
-export declare const CAPABILITY_INDEX: ReadonlyMap<CapabilityId, CapabilityCard>;
+export const CAPABILITY_INDEX: ReadonlyMap<CapabilityId, CapabilityCard> = new Map(
+    CAPABILITY_CARDS.map((card) => [card.id, card]),
+);
+
 /**
  * Profile membership for every catalog row, keyed by id and derived from the
  * bridge table. The data-driven provisioner intersects this with a requested
  * profile to assemble a session's capability set — no per-profile build
  * functions, just a table walk.
  */
-export declare const CARD_PROFILES: ReadonlyMap<CapabilityId, CardProfiles>;
+export const CARD_PROFILES: ReadonlyMap<CapabilityId, CardProfiles> = new Map(
+    builtinDescriptors().map((descriptor: BuiltinDescriptor) => [descriptor.id, descriptor.profiles]),
+);
+
 /** The wire-facing ids of every catalog row, in catalog order. */
-export declare function capabilityIds(): CapabilityId[];
+export function capabilityIds(): CapabilityId[] {
+    return CAPABILITY_CARDS.map((card) => card.id);
+}
+
 /** True when a catalog row exists under this id. */
-export declare function hasCapability(id: CapabilityId): boolean;
+export function hasCapability(id: CapabilityId): boolean {
+    return CAPABILITY_INDEX.has(id);
+}
+
 /** Fetch a catalog row by id, or `undefined` when the id is unknown. */
-export declare function findCard(id: CapabilityId): CapabilityCard | undefined;
+export function findCard(id: CapabilityId): CapabilityCard | undefined {
+    return CAPABILITY_INDEX.get(id);
+}
+
 /**
  * The catalog rows that participate in a profile, in catalog order.
  *
@@ -59,4 +96,14 @@ export declare function findCard(id: CapabilityId): CapabilityCard | undefined;
  *
  * @param profile the requested deck profile
  */
-export declare function cardsForProfile(profile: "authoring" | "survey" | "all"): CapabilityCard[];
+export function cardsForProfile(profile: DeckProfile): CapabilityCard[] {
+    if (profile === "all") return [...CAPABILITY_CARDS];
+    return CAPABILITY_CARDS.filter((card) => {
+        const profiles = CARD_PROFILES.get(card.id);
+        return profiles !== undefined && profiles.includes(profile);
+    });
+}
+
+// Mark the capabilityId brand as used so strict unused-imports settings
+// don't strip it; the brand is exported through the re-exports in ./index.
+void capabilityId;

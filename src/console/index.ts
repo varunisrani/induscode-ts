@@ -1,5 +1,3 @@
-// @ts-nocheck
-// Type declarations recovered from dist/types (no runtime body)
 /**
  * Console subsystem — public barrel.
  *
@@ -18,12 +16,12 @@
  * console surface from `src/console` rather than reaching into individual
  * modules.
  */
-export type { ThemeScheme, ThemeTokens, ThemeToken, ThemePalette, ConsoleTheme, ViewRowKind, ViewRow, ModalKind, ModalState, ConsoleState, ConsoleEvent, ConsoleEventType, ConsoleEventOf, ConsoleReducer, ConsoleDispatch, SlashOutcome, SlashContext, SlashCommand, SlashRegistry, ConsoleProps, ConsoleHost, Themed, RenderSlot, SessionSnapshot, ToolExecutionState, StatusMessage, UiDisplayBlock, InkThemeAdapter, SessionConductor, SessionSignal, ConductorState, } from "./contract";
-export { DEFAULT_SCHEME, isThemeScheme, NO_MODAL, transitionModal, EMPTY_CONSOLE_STATE, } from "./contract";
-export { consoleReducer, initConsoleState } from "./reducer";
-export { THEMES, THEME_SCHEMES, resolveTheme, MIDNIGHT_PALETTE, DAYLIGHT_PALETTE, PALETTES, deriveTokens, themeAdapter, frameworkColors, } from "./theme";
-export { SLASH_COMMANDS, FAMILY, DEFAULT_SLASH_REGISTRY, buildRegistry, tokensOf, findCommand, matchPrefix, listFamilies, commandsInFamily, SLASH_PREFIX, looksLikeSlash, parseSlash, resolveSlash, type SlashLine, type SlashResolution, } from "./slash";
-export { NO_INTENT, readKey, NO_CHORD, advanceChord, type KeyChord, type ConsoleVerb, type ConsoleIntent, type ChordOutcome, type ChordLatch, type ChordStep, PASTE_THRESHOLDS, PASTE_BURST_GAP_MS, EMPTY_PASTE_VAULT, pasteMarker, classifyPaste, coalescePaste, expandMarkers, hasMarkers, type PasteThresholds, type PasteVault, type PasteCapture, completeAt, applySuggestion, type CompletionKind, type Suggestion, type TokenSpan, type CompletionResult, type DirEntry, type DirReader, } from "./input";
+export type { ThemeScheme, ThemeTokens, ThemeToken, ThemePalette, ConsoleTheme, ViewRowKind, ViewRow, ModalKind, ModalState, ConsoleState, ConsoleEvent, ConsoleEventType, ConsoleEventOf, ConsoleReducer, ConsoleDispatch, SlashOutcome, SlashContext, SlashCommand, SlashRegistry, ConsoleProps, ConsoleHost, Themed, RenderSlot, SessionSnapshot, ToolExecutionState, StatusMessage, UiDisplayBlock, InkThemeAdapter, SessionConductor, SessionSignal, ConductorState, } from "./contract.js";
+export { DEFAULT_SCHEME, isThemeScheme, NO_MODAL, transitionModal, EMPTY_CONSOLE_STATE, } from "./contract.js";
+export { consoleReducer, initConsoleState } from "./reducer.js";
+export { THEMES, THEME_SCHEMES, resolveTheme, MIDNIGHT_PALETTE, DAYLIGHT_PALETTE, PALETTES, deriveTokens, themeAdapter, frameworkColors, } from "./theme/index.js";
+export { SLASH_COMMANDS, FAMILY, DEFAULT_SLASH_REGISTRY, buildRegistry, tokensOf, findCommand, matchPrefix, listFamilies, commandsInFamily, SLASH_PREFIX, looksLikeSlash, parseSlash, resolveSlash, type SlashLine, type SlashResolution, } from "./slash/index.js";
+export { NO_INTENT, readKey, NO_CHORD, advanceChord, type KeyChord, type ConsoleVerb, type ConsoleIntent, type ChordOutcome, type ChordLatch, type ChordStep, PASTE_THRESHOLDS, PASTE_BURST_GAP_MS, EMPTY_PASTE_VAULT, pasteMarker, classifyPaste, coalescePaste, expandMarkers, hasMarkers, type PasteThresholds, type PasteVault, type PasteCapture, completeAt, applySuggestion, type CompletionKind, type Suggestion, type TokenSpan, type CompletionResult, type DirEntry, type DirReader, } from "./input/index.js";
 export { TerminalConsole } from "./components/TerminalConsole";
 export { Composer, type ComposerProps } from "./components/Composer";
 export { StatusBar, type StatusBarProps } from "./components/StatusBar";
@@ -31,6 +29,6 @@ export { Banner, type BannerProps } from "./components/Banner";
 export { BackgroundAgents, deriveAgentRuns, type BackgroundAgentsProps, type AgentRun, type AgentRunStatus, } from "./components/BackgroundAgents";
 export { AgentsView, type AgentsViewProps } from "./components/AgentsView";
 export { MASCOTS, TIPS, WHATS_NEW, mascotRows, pickWelcomeVariant, randomWelcomeSeed, type MascotFace, type MascotTone, type MascotSegment, type WelcomeVariant, } from "./components/welcome";
-export { gatherStartup, gatherChangelog } from "./startup";
-export type { StartupMap, StartupSection, StartupChangelog, StartupChangelogMode, StartupNotice, StartupNoticeKind, StartupInputs, } from "./startup";
-export { mountConsole, type MountConsoleOptions, type MountResult, } from "./mount";
+export { gatherStartup, gatherChangelog } from "./startup.js";
+export type { StartupMap, StartupSection, StartupChangelog, StartupChangelogMode, StartupNotice, StartupNoticeKind, StartupInputs, } from "./startup.js";
+export { mountConsole, type MountConsoleOptions, type MountResult, } from "./mount.js";

@@ -1,47 +1,88 @@
-// @ts-nocheck
-// Type declarations recovered from dist/types (no runtime body)
 /**
  * Signal channel — the in-memory pipe between the recorder and the sinks.
- *
- * The recorder *pushes* {@link Signal}s the instant a probe opens, updates, or
- * closes; a {@link Sink} *pulls* a {@link SignalStream} (an
- * `AsyncIterable<Signal>`) and drains it at its own pace. A
- * {@link SignalChannel} bridges those two models: it is an unbounded
- * push-to-pull queue with back-pressure expressed by pull latency.
- *
- * Mechanics: when a consumer is parked in `next()` awaiting a value, an emitted
- * signal resolves its promise immediately (no buffering). When no consumer is
- * waiting, the signal is appended to an internal buffer and handed out in FIFO
- * order on the next pull. Closing the channel makes the iterator finish once the
- * buffer drains. The channel multiplexes: every call to {@link stream} returns an
- * independent iterator, and each emitted signal is fanned out to all of them, so
- * the console, file, and network sinks can each drain the same trail.
  */
-import { SignalEmit, SignalStream } from "./contract";
-/**
- * A fan-out push-to-pull pipe of {@link Signal}s.
- *
- * The recorder holds the {@link SignalChannel.emit} end; each sink holds a
- * {@link SignalStream} obtained from {@link SignalChannel.stream}. Producers
- * never block: emitting onto a channel with no parked consumer just buffers.
- */
-export interface SignalChannel {
-    /** Push one signal to every attached subscriber. A no-op once closed. */
-    readonly emit: SignalEmit;
-    /** Attach a new independent consumer; returns its pull-model stream. */
-    stream(): SignalStream;
-    /** How many subscribers are currently attached. */
-    readonly size: number;
-    /** Whether {@link close} has been called. */
-    readonly closed: boolean;
-    /** Finish every attached stream once its buffer drains. Idempotent. */
-    close(): void;
+import type { Signal, SignalChannel, SignalEmit, SignalStream } from "./contract.js";
+
+interface Subscriber {
+  buffer: Signal[];
+  waiter: ((value: { value: Signal; done: false } | { value: undefined; done: true }) => void) | null;
+  done: boolean;
 }
-/**
- * Create a fresh, empty {@link SignalChannel}.
- *
- * The returned channel starts with no subscribers; call {@link SignalChannel.stream}
- * once per sink before emitting if those sinks must observe the first signal.
- * (A subscriber only receives signals emitted after it attaches.)
- */
-export declare function createChannel(): SignalChannel;
+
+export function createChannel(): SignalChannel {
+  const subscribers = new Set<Subscriber>();
+  let closed = false;
+
+  function deliver(sub: Subscriber, signal: Signal): void {
+    if (sub.waiter !== null) {
+      const resolve = sub.waiter;
+      sub.waiter = null;
+      resolve({ value: signal, done: false });
+    } else {
+      sub.buffer.push(signal);
+    }
+  }
+
+  const emit: SignalEmit = (signal) => {
+    if (closed) return;
+    for (const sub of subscribers) {
+      deliver(sub, signal);
+    }
+  };
+
+  function close(): void {
+    if (closed) return;
+    closed = true;
+    for (const sub of subscribers) {
+      sub.done = true;
+      if (sub.waiter !== null && sub.buffer.length === 0) {
+        const resolve = sub.waiter;
+        sub.waiter = null;
+        resolve({ value: undefined, done: true });
+      }
+    }
+  }
+
+  function stream(): SignalStream {
+    const sub: Subscriber = { buffer: [], waiter: null, done: closed };
+    subscribers.add(sub);
+    const iterator = {
+      next(): Promise<{ value: Signal; done: false } | { value: undefined; done: true }> {
+        const buffered = sub.buffer.shift();
+        if (buffered !== undefined) {
+          return Promise.resolve({ value: buffered, done: false });
+        }
+        if (sub.done) {
+          subscribers.delete(sub);
+          return Promise.resolve({ value: undefined, done: true });
+        }
+        return new Promise((resolve) => {
+          sub.waiter = resolve;
+        });
+      },
+      return(): Promise<{ value: undefined; done: true }> {
+        subscribers.delete(sub);
+        sub.waiter = null;
+        sub.buffer.length = 0;
+        return Promise.resolve({ value: undefined, done: true });
+      },
+    };
+    return {
+      [Symbol.asyncIterator]() {
+        return iterator;
+      },
+    };
+  }
+
+  return {
+    emit,
+    stream,
+    get size(): number {
+      return subscribers.size;
+    },
+    get closed(): boolean {
+      return closed;
+    },
+    close,
+  };
+}

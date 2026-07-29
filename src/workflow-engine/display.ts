@@ -1,150 +1,224 @@
-// @ts-nocheck
-// Type declarations recovered from dist/types (no runtime body)
-/**
- * Workflow progress snapshot model + text renderer.
- *
- * The engine emits lifecycle callbacks (phase started, agent started/ended,
- * log) which a host folds into a {@link WorkflowSnapshot}. This module owns the
- * snapshot's pure data shape, the two pure recompute helpers, and the
- * `renderWorkflowText` / `renderWorkflowLines` renderers that turn a snapshot
- * into the `◆ Workflow:` progress tree shown live in the tool result.
- *
- * The renderer is a verbatim behavioral port of pi-dynamic-workflows'
- * `src/display.ts` — same `◆ Workflow: name (x/y done)` header, same per-phase
- * `▶/✓` markers with `done/total · running · errors · skipped` counts, same
- * `    #id <glyph> label` subagent rows, same status glyphs
- * (`○ queued`, `● running`, `✓ done`, `✗ error`, `- skipped`), same "Unphased"
- * group, same trailing `log:` lines.
- *
- * Unlike pi, this file carries NO framework-UI bindings (no `ExtensionContext`,
- * no widget display). The card/console wiring that consumes these renderers
- * lands in stage 2; here we expose only the pure snapshot + string surface.
- */
-import type { WorkflowMeta } from "./parse";
-/** Lifecycle status of a single workflow subagent row. */
+import type { WorkflowMeta } from "./parse.js";
+
 export type WorkflowAgentStatus = "queued" | "running" | "done" | "error" | "skipped";
-/** One subagent's row in the live progress tree. */
+
 export interface WorkflowAgentSnapshot {
-    /** 1-based id, the order the agent started in. */
-    id: number;
-    /** Short human label for the agent (defaulted from phase + index if absent). */
-    label: string;
-    /** The phase the agent belongs to, if any. */
-    phase?: string;
-    /** The task prompt the agent was given. */
-    prompt: string;
-    /** Current lifecycle status. */
-    status: WorkflowAgentStatus;
-    /** Optional short preview of the agent's result. */
-    resultPreview?: string;
-    /** Optional error summary when the agent failed or was skipped. */
-    error?: string;
-    /** Wall-clock ms when the subagent started (for the live elapsed counter). */
-    startedAt?: number;
-    /** Wall-clock ms when the subagent settled (caps the elapsed counter). */
-    endedAt?: number;
-    /** Cumulative input tokens the subagent has spent. */
-    tokensIn?: number;
-    /** Cumulative output tokens the subagent has spent. */
-    tokensOut?: number;
-    /** How many tool calls the subagent has started. */
-    toolCount?: number;
-    /** The tool the subagent is running right now, if any. */
-    currentTool?: string;
-    /** The last tool the subagent finished (when nothing is running). */
-    lastTool?: string;
+  id: number;
+  label: string;
+  phase?: string;
+  prompt: string;
+  status: WorkflowAgentStatus;
+  resultPreview?: string;
+  error?: string;
+  startedAt?: number;
+  endedAt?: number;
+  tokensIn?: number;
+  tokensOut?: number;
+  toolCount?: number;
+  currentTool?: string;
+  lastTool?: string;
 }
-/** The full live progress model for one workflow run. */
+
 export interface WorkflowSnapshot {
-    /** Workflow name (from `meta.name`). */
-    name: string;
-    /** Workflow description (from `meta.description`). */
-    description?: string;
-    /** Declared/observed phase titles, in order. */
-    phases: string[];
-    /** The phase currently active (last `phase()` call). */
-    currentPhase?: string;
-    /** Log lines emitted via `log()`. */
-    logs: string[];
-    /** Every subagent row, in start order. */
-    agents: WorkflowAgentSnapshot[];
-    /** Total agents seen. */
-    agentCount: number;
-    /** Agents currently running. */
-    runningCount: number;
-    /** Agents finished successfully. */
-    doneCount: number;
-    /** Agents that errored. */
-    errorCount: number;
-    /** Total run duration once complete. */
-    durationMs?: number;
-    /** The workflow's final returned value once complete. */
-    result?: unknown;
+  name: string;
+  description?: string;
+  phases: string[];
+  currentPhase?: string;
+  logs: string[];
+  agents: WorkflowAgentSnapshot[];
+  agentCount: number;
+  runningCount: number;
+  doneCount: number;
+  errorCount: number;
+  durationMs?: number;
+  result?: unknown;
 }
-/** Tunables for the text renderer (how much of the tree to show). */
+
 export interface WorkflowDisplayOptions {
-    /** Max subagent rows shown per phase (most recent kept). Default 8. */
-    maxAgents?: number;
-    /** Max trailing log lines shown. Default 2. */
-    maxLogs?: number;
-    /** Append a short result preview to each agent row. Default false. */
-    showResultPreviews?: boolean;
-    /**
-     * Soft cap on total tree lines for the LIVE render. Default 9 — headroom under
-     * the framework `TaskPanel` 10-line clamp so a running agent is never cut off
-     * by a trailing `…`. Completed phases collapse to one line each, and if the
-     * tree is still over budget the OLDEST completed phases collapse into a single
-     * `… N earlier phases done` line (running/current phases are never collapsed).
-     * Pass a large value (e.g. the settled/final render, or Ctrl+O expand) to show
-     * everything in full.
-     */
-    maxLines?: number;
+  maxAgents?: number;
+  maxLogs?: number;
+  showResultPreviews?: boolean;
+  maxLines?: number;
 }
-/**
- * Build an empty snapshot for a freshly parsed workflow `meta`.
- *
- * @param meta the workflow header
- */
-export declare function createWorkflowSnapshot(meta: WorkflowMeta): WorkflowSnapshot;
-/**
- * Recompute the derived counts (`agentCount`/`runningCount`/`doneCount`/
- * `errorCount`) from the `agents` array. Pure — returns a new snapshot.
- *
- * @param snapshot the snapshot whose counts to refresh
- */
-export declare function recomputeWorkflowSnapshot(snapshot: WorkflowSnapshot): WorkflowSnapshot;
-/**
- * Render the snapshot as the `◆ Workflow:` progress tree (array of lines).
- *
- * The per-agent metrics segment (elapsed seconds, token spend, tool activity) is
- * computed at render time from `now` so the seconds tick on every render even
- * during a long silent tool call. Keep `now` an explicit param so the renderer
- * stays pure and testable.
- *
- * @param snapshot the progress model
- * @param options render tunables
- * @param now the current wall-clock ms used to compute live elapsed seconds
- */
-export declare function renderWorkflowLines(snapshot: WorkflowSnapshot, options?: WorkflowDisplayOptions, now?: number): string[];
-/**
- * Render the snapshot as a single string for the tool result.
- *
- * For the LIVE (not-completed) render the `◆ Workflow:` header already says the
- * run is in progress, so no extra header line is added — this saves a line under
- * the framework `TaskPanel` 10-line clamp. The final (completed) render keeps the
- * explicit `Workflow completed` header.
- *
- * @param snapshot the progress model
- * @param completed whether the run has finished
- * @param options render tunables
- * @param now the current wall-clock ms used to compute live elapsed seconds
- */
-export declare function renderWorkflowText(snapshot: WorkflowSnapshot, completed?: boolean, options?: WorkflowDisplayOptions, now?: number): string;
-/**
- * One-line preview of an arbitrary result value (string passthrough, else
- * JSON), truncated to `max` chars. Used to fill `resultPreview`.
- *
- * @param value the result to preview
- * @param max max preview length
- */
-export declare function preview(value: unknown, max?: number): string;
+
+interface RenderBlock {
+  full: string[];
+  active: boolean;
+  compact: string;
+}
+
+export function createWorkflowSnapshot(meta: WorkflowMeta): WorkflowSnapshot {
+  return {
+    name: meta.name,
+    description: meta.description,
+    phases: [],
+    logs: [],
+    agents: [],
+    agentCount: 0,
+    runningCount: 0,
+    doneCount: 0,
+    errorCount: 0,
+  };
+}
+
+export function recomputeWorkflowSnapshot(snapshot: WorkflowSnapshot): WorkflowSnapshot {
+  const runningCount = snapshot.agents.filter((agent) => agent.status === "running").length;
+  const doneCount = snapshot.agents.filter((agent) => agent.status === "done").length;
+  const errorCount = snapshot.agents.filter((agent) => agent.status === "error").length;
+  return { ...snapshot, agentCount: snapshot.agents.length, runningCount, doneCount, errorCount };
+}
+
+export function renderWorkflowLines(
+  snapshot: WorkflowSnapshot,
+  options: WorkflowDisplayOptions = {},
+  now = Date.now(),
+): string[] {
+  const maxAgents = options.maxAgents ?? 8;
+  const maxLogs = options.maxLogs ?? 2;
+  const maxLines = options.maxLines ?? 9;
+  const showResultPreviews = options.showResultPreviews ?? false;
+  const state = snapshot.errorCount > 0
+    ? `, ${snapshot.errorCount} errors`
+    : snapshot.runningCount > 0 ? `, ${snapshot.runningCount} running` : "";
+  const header = `◆ Workflow: ${snapshot.name} (${snapshot.doneCount}/${snapshot.agentCount} done${state})`;
+  const agentPhaseNames = snapshot.agents.map((agent) => agent.phase).filter((phase): phase is string => Boolean(phase));
+  const phaseNames = unique([
+    ...snapshot.phases,
+    ...(snapshot.currentPhase ? [snapshot.currentPhase] : []),
+    ...agentPhaseNames,
+  ]);
+  const rendered = new Set<WorkflowAgentSnapshot>();
+  const blocks: RenderBlock[] = [];
+  for (const phase of phaseNames) {
+    const agents = snapshot.agents.filter((agent) => agent.phase === phase);
+    if (agents.length === 0 && snapshot.currentPhase !== phase) continue;
+    for (const agent of agents) rendered.add(agent);
+    const done = agents.filter((agent) => agent.status === "done").length;
+    const running = agents.filter((agent) => agent.status === "running").length;
+    const errors = agents.filter((agent) => agent.status === "error").length;
+    const skipped = agents.filter((agent) => agent.status === "skipped").length;
+    const complete = agents.length > 0 && done + errors + skipped === agents.length;
+    const active = running > 0 || errors > 0 || snapshot.currentPhase === phase || !complete;
+    const marker = running > 0 || (!complete && snapshot.currentPhase === phase) ? "▶" : complete ? "✓" : " ";
+    const counts = `${done}/${agents.length}${running ? ` · ${running} running` : ""}${errors ? ` · ${errors} errors` : ""}${skipped ? ` · ${skipped} skipped` : ""}`;
+    const full = [`  ${marker} ${phase} ${counts}`];
+    const visibleAgents = agents.slice(-maxAgents);
+    for (const agent of visibleAgents) {
+      const result = showResultPreviews && agent.resultPreview ? ` — ${agent.resultPreview}` : "";
+      const metrics = renderAgentMetrics(agent, now);
+      full.push(`    #${agent.id} ${statusIcon(agent.status)} ${shorten(agent.label, 48)}${metrics}${result}`);
+    }
+    if (agents.length > visibleAgents.length) full.push(`    … ${agents.length - visibleAgents.length} earlier agents`);
+    blocks.push({ full, active, compact: compactPhaseLine(marker, phase, done, agents, now) });
+  }
+  const unphased = snapshot.agents.filter((agent) => !rendered.has(agent));
+  if (unphased.length) {
+    const full = ["  Unphased"];
+    for (const agent of unphased.slice(-maxAgents)) {
+      const result = showResultPreviews && agent.resultPreview ? ` — ${agent.resultPreview}` : "";
+      full.push(`    #${agent.id} ${statusIcon(agent.status)} ${shorten(agent.label, 48)}${renderAgentMetrics(agent, now)}${result}`);
+    }
+    blocks.push({ full, active: true, compact: full[0] });
+  }
+  const visibleLogs = snapshot.logs.slice(-maxLogs);
+  const logLines = visibleLogs.length ? ["", ...visibleLogs.map((log) => `  log: ${log}`)] : [];
+  return assembleTree(header, blocks, logLines, maxLines);
+}
+
+export function assembleTree(header: string, blocks: RenderBlock[], logLines: string[], maxLines: number): string[] {
+  if (!Number.isFinite(maxLines)) return [header, ...blocks.flatMap((block) => block.full), ...logLines];
+  const baseRow = (block: RenderBlock) => block.active ? block.full : [block.compact];
+  const baseLen = 1 + blocks.reduce((n, block) => n + baseRow(block).length, 0) + logLines.length;
+  if (baseLen <= maxLines) return [header, ...blocks.flatMap(baseRow), ...logLines];
+  const folded = new Set<number>();
+  for (let i = 0; i < blocks.length; i++) {
+    if (blocks[i].active) continue;
+    const keptLen = blocks.reduce((n, block, j) => folded.has(j) ? n : n + baseRow(block).length, 0);
+    const summaryCost = folded.size ? 1 : 0;
+    if (1 + keptLen + summaryCost + logLines.length <= maxLines) break;
+    folded.add(i);
+  }
+  const output = [header];
+  if (folded.size) output.push(`  … ${folded.size} earlier phases done`);
+  blocks.forEach((block, i) => {
+    if (!folded.has(i)) output.push(...baseRow(block));
+  });
+  output.push(...logLines);
+  return output;
+}
+
+export function compactPhaseLine(
+  marker: string,
+  phase: string,
+  done: number,
+  agents: WorkflowAgentSnapshot[],
+  now: number,
+): string {
+  const prefix = `  ${marker} ${phase} ${done}/${agents.length}`;
+  const totalTools = agents.reduce((n, agent) => n + (agent.toolCount ?? 0), 0);
+  const toolSeg = totalTools > 0 ? ` · ${totalTools} ${totalTools === 1 ? "tool" : "tools"}` : "";
+  if (agents.length === 1) {
+    const agent = agents[0];
+    const elapsedMs = Math.max(0, (agent.endedAt ?? now) - (agent.startedAt ?? agent.endedAt ?? now));
+    const secs = agent.startedAt !== undefined ? ` · #${agent.id} ${Math.floor(elapsedMs / 1000)}s` : "";
+    return `${prefix}${secs}${toolSeg}`;
+  }
+  const totalTokens = agents.reduce((n, agent) => n + (agent.tokensIn ?? 0) + (agent.tokensOut ?? 0), 0);
+  const tokenSeg = totalTokens > 0 ? ` · ${formatTokens(totalTokens)} tok` : "";
+  return `${prefix}${tokenSeg}${toolSeg}`;
+}
+
+export function renderWorkflowText(snapshot: WorkflowSnapshot, completed = false, options: WorkflowDisplayOptions = {}, now = Date.now()): string {
+  const effective = completed && options.maxLines === undefined ? { ...options, maxLines: Infinity } : options;
+  const tree = renderWorkflowLines(snapshot, effective, now);
+  return completed ? ["Workflow completed", ...tree].join("\n") : tree.join("\n");
+}
+
+export function statusIcon(status: WorkflowAgentStatus): string {
+  switch (status) {
+    case "queued": return "○";
+    case "running": return "●";
+    case "done": return "✓";
+    case "error": return "✗";
+    case "skipped": return "-";
+  }
+}
+
+export function renderAgentMetrics(agent: WorkflowAgentSnapshot, now: number): string {
+  if (agent.startedAt === undefined) return "";
+  const running = agent.status === "running";
+  const elapsedMs = Math.max(0, (agent.endedAt ?? now) - agent.startedAt);
+  const segments = [`${Math.floor(elapsedMs / 1000)}s`];
+  const tokensIn = agent.tokensIn ?? 0;
+  const tokensOut = agent.tokensOut ?? 0;
+  if (tokensIn > 0 || tokensOut > 0) segments.push(`↑${formatTokens(tokensIn)} ↓${formatTokens(tokensOut)}`);
+  const toolCount = agent.toolCount ?? 0;
+  if (running && (toolCount > 0 || agent.currentTool)) {
+    const tail = agent.currentTool ? ` (running ${agent.currentTool})` : "";
+    const last = agent.lastTool ?? agent.currentTool;
+    segments.push(last ? `${last} ×${toolCount}${tail}` : `0 tools${tail}`);
+  } else if (!running && toolCount > 0) {
+    segments.push(`${toolCount} ${toolCount === 1 ? "tool" : "tools"}`);
+  }
+  return `   ${segments.join(" · ")}`;
+}
+
+export function formatTokens(value: number): string {
+  if (value < 1000) return String(value);
+  return `${(value / 1000).toFixed(1)}k`;
+}
+
+export function unique<T>(values: T[]): T[] {
+  return [...new Set(values)];
+}
+
+export function shorten(value: string, max: number): string {
+  const text = value.replace(/\s+/g, " ").trim();
+  return text.length > max ? `${text.slice(0, max - 1)}…` : text;
+}
+
+export function preview(value: unknown, max = 80): string {
+  const text = typeof value === "string" ? value : JSON.stringify(value);
+  if (!text) return "";
+  return text.length > max ? `${text.slice(0, max - 1)}…` : text;
+}

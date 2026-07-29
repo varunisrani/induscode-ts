@@ -1,5 +1,3 @@
-// @ts-nocheck
-// Type declarations recovered from dist/types (no runtime body)
 /**
  * Runner: `link` — headless JSON-RPC link for a driving parent process.
  *
@@ -10,7 +8,18 @@
  * reply is framed back; the runner resolves the success exit code once the
  * inbound stream ends.
  */
-import type { Runner } from "../contract";
+import { createLinkServer, SESSION_OPS } from "../../channels/index.js";
+import type { Runner } from "../contract.js";
+import { buildSessionConductor } from "./session.js";
+
+const EXIT_OK = 0;
+
+const STDOUT = {
+  write(chunk: string | Uint8Array, cb?: (err?: Error | null) => void) {
+    return process.stdout.write(chunk, cb);
+  },
+};
+
 /**
  * The headless-link runner.
  *
@@ -19,4 +28,18 @@ import type { Runner } from "../contract";
  * requests from stdin and writing framed replies to stdout, and resolves the
  * success exit code when the inbound stream is exhausted.
  */
-export declare const linkRunner: Runner;
+export const linkRunner: Runner = {
+  id: "link",
+  accepts(inv) {
+    return inv.mode === "link";
+  },
+  async run(ctx) {
+    const conductor = await buildSessionConductor(ctx);
+    const server = createLinkServer(SESSION_OPS, conductor, {
+      in: process.stdin,
+      out: STDOUT,
+    });
+    await server.done;
+    return EXIT_OK;
+  },
+};

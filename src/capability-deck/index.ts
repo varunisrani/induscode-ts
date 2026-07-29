@@ -16,18 +16,18 @@
  * barrel as they land; consumers import the deck surface from
  * `src/capability-deck` rather than reaching into individual modules.
  */
-export type { Capability, AnyCapability, CapabilityId, CapabilityCard, CardProfiles, DeckProfile, DeckContext, DeckFsBackend, DeckShellBackend, DeckFrameworkHandles, BridgeKey, BridgeOp, BridgeEntry, LedgerSnapshot, ToolDeck, DeckBox, DeckFaultKind, DeckFault, AgentTool, AgentToolResult, ToolBox, TSchema, Static, } from "./contract";
-export { capabilityId, bridgeKey, reduceLedger, deckFault, } from "./contract";
+export type { Capability, AnyCapability, CapabilityId, CapabilityCard, CardProfiles, DeckProfile, DeckContext, DeckFsBackend, DeckShellBackend, DeckFrameworkHandles, BridgeKey, BridgeOp, BridgeEntry, LedgerSnapshot, ToolDeck, DeckBox, DeckFaultKind, DeckFault, AgentTool, AgentToolResult, ToolBox, TSchema, Static, } from "./contract.js";
+export { capabilityId, bridgeKey, reduceLedger, deckFault, } from "./contract.js";
 /**
  * Built-in bridge — the single seam re-exposing the framework's native tools
  * (read/write/edit/ls/grep/find/bash/process/checklist/web) as capabilities.
  */
-export { BUILTIN_BRIDGE, BUILTIN_IDS, BUILTIN_PROFILES, builtinDescriptors, buildBuiltin, buildBuiltinsForProfile, type BridgeBuilder, type BuiltinDescriptor, } from "./builtin-bridge";
+export { BUILTIN_BRIDGE, BUILTIN_IDS, BUILTIN_PROFILES, builtinDescriptors, buildBuiltin, buildBuiltinsForProfile, type BridgeBuilder, type BuiltinDescriptor, } from "./builtin-bridge.js";
 /**
  * Capability catalog — the single `CAPABILITY_CARDS` source of truth plus the
  * lookups/profile filters derived from it.
  */
-export { CAPABILITY_CARDS, CAPABILITY_INDEX, CARD_PROFILES, capabilityIds, hasCapability, findCard, cardsForProfile, } from "./manifest";
+export { CAPABILITY_CARDS, CAPABILITY_INDEX, CARD_PROFILES, capabilityIds, hasCapability, findCard, cardsForProfile, } from "./manifest.js";
 /**
  * App-novel capability cards — the in-house tools the deck builds itself
  * (checklist, background-process proxy, delegate/sub-agent, SaaS connector,
@@ -45,4 +45,4 @@ export { qualifyBridgeName, bridgeContentKey, bridgeUlidKey, emptyBridgeLedger, 
  * Deck provisioning — the single data-driven {@link provisionDeck} assembler over
  * the profile table, plus the profile-to-cards selection it walks.
  */
-export { provisionDeck, cardsForDeckProfile, } from "./provision";
+export { provisionDeck, cardsForDeckProfile, } from "./provision.js";

@@ -1,121 +1,209 @@
-// @ts-nocheck
-// Type declarations recovered from dist/types (no runtime body)
 /**
  * Startup gathering — the pure resource/notices/changelog reader the banner draws.
  *
  * The interactive console opens with a one-shot survey of what the session has to
  * work with: which context documents the agent will read, which capability cards
  * (skills) and prompt templates (commands) were discovered on disk, and a count
- * of each. This module *gathers* that survey and nothing else — it returns a
- * small, render-agnostic {@link StartupMap} the banner turns into a bordered
- * panel. It performs only read-only filesystem probes (existence checks plus the
- * briefing loaders) and holds no state; given the same disk it returns the same
- * value, so a test can drive it against a temp tree.
- *
- * It also reads (when present) a `CHANGELOG.md` at the app root and folds it into
- * a {@link StartupChangelog} the banner shows on a version bump — full on the
- * first sight of a new version, a one-line "updated to" note otherwise. The
- * decision of *which* of those to show is the gatherer's: it is handed the
- * running version and the last-seen version and reports a `mode`, so the banner
- * stays a dumb renderer.
- *
- * Nothing here imports React or Ink. The banner imports the *shapes* below and
- * the surface calls {@link gatherStartup} once at mount; the two never share
- * mutable state.
+ * of each. This module *gathers* that survey and nothing else.
  */
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import { gatherSkillCards, loadMacros } from "../briefing/index.js";
+
+const PROFILE_DIR = ".indusagi";
+const CONTEXT_FILES = ["AGENTS.md", "CLAUDE.md"];
+
+function skillRoots(cwd: string, home: string) {
+  return [
+    { dir: join(cwd, PROFILE_DIR, "skills"), origin: "project" as const },
+    { dir: join(home, PROFILE_DIR, "skills"), origin: "user" as const }
+  ];
+}
+
+function macroRoots(cwd: string, home: string) {
+  return [
+    { dir: join(cwd, PROFILE_DIR, "commands"), origin: "project" as const, label: "project" },
+    { dir: join(home, PROFILE_DIR, "commands"), origin: "user" as const, label: "user" }
+  ];
+}
+
+function shortenPath(path: string, cwd: string, home: string) {
+  if (cwd.length > 0 && path.startsWith(cwd)) {
+    const rest = path.slice(cwd.length).replace(/^[/\\]+/, "");
+    return rest.length > 0 ? `./${rest}` : ".";
+  }
+  if (home.length > 0 && path.startsWith(home)) {
+    return `~${path.slice(home.length)}`;
+  }
+  return path;
+}
+
+const MAX_SECTION_LINES = 6;
+
+function capLines(lines: string[]) {
+  if (lines.length <= MAX_SECTION_LINES) return [...lines];
+  const head = lines.slice(0, MAX_SECTION_LINES);
+  return [...head, `... ${lines.length - MAX_SECTION_LINES} more`];
+}
+
+function section(title: string, lines: string[]): StartupSection | null {
+  const filtered = lines.map((line) => line.trim()).filter((line) => line.length > 0);
+  if (filtered.length === 0) return null;
+  return { title, lines: capLines(filtered), count: filtered.length };
+}
+
+function gatherContext(cwd: string, home: string) {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const root of [cwd, home]) {
+    if (root.length === 0) continue;
+    for (const name of CONTEXT_FILES) {
+      const path = join(root, name);
+      if (seen.has(path)) continue;
+      seen.add(path);
+      if (existsSync(path)) out.push(shortenPath(path, cwd, home));
+    }
+  }
+  return out;
+}
+
+function gatherSkills(cwd: string, home: string) {
+  let cards: Array<{ name: string; location: string }> = [];
+  try {
+    cards = gatherSkillCards(skillRoots(cwd, home)).cards.slice();
+  } catch {
+    cards = [];
+  }
+  return cards.map((card) => `${card.name}  ${shortenPath(card.location, cwd, home)}`);
+}
+
+function gatherPrompts(cwd: string, home: string) {
+  const lines: string[] = [];
+  const claimed = new Set<string>();
+  for (const root of macroRoots(cwd, home)) {
+    let loaded: Array<{ name: string; source: string }> = [];
+    try {
+      loaded = loadMacros(root.dir, { origin: root.origin, label: root.label });
+    } catch {
+      loaded = [];
+    }
+    for (const macro of loaded) {
+      if (claimed.has(macro.name)) continue;
+      claimed.add(macro.name);
+      lines.push(`/${macro.name}  ${shortenPath(macro.source, cwd, home)}`);
+    }
+  }
+  return lines;
+}
+
 /**
- * One labelled group inside the startup map.
- *
- * A section is a title, the per-entry display lines (already shortened for the
- * terminal), and the *full* count the lines were derived from — which may exceed
- * the number of lines when the renderer elides a long list. A section with no
- * entries is omitted by {@link gatherStartup} rather than emitted empty.
+ * Gather the startup map: context documents, skills, and prompt templates.
  */
-export interface StartupSection {
-    /** The group heading (e.g. `"Context"`, `"Skills"`). */
-    readonly title: string;
-    /** The display lines, one per surfaced entry, already path-shortened. */
-    readonly lines: readonly string[];
-    /** How many entries the section spans (>= `lines.length`). */
-    readonly count: number;
+export function gatherStartup(inputs: StartupInputs): StartupMap {
+  const { cwd, home } = inputs;
+  const sections: StartupSection[] = [];
+  const context = section("Context", gatherContext(cwd, home));
+  if (context) sections.push(context);
+  const skills = section("Skills", gatherSkills(cwd, home));
+  if (skills) sections.push(skills);
+  const prompts = section("Prompts", gatherPrompts(cwd, home));
+  if (prompts) sections.push(prompts);
+  return { sections };
 }
-/**
- * The gathered survey the banner renders as the "Startup Map" panel.
- *
- * A flat ordered list of {@link StartupSection}s. Empty when nothing was found,
- * in which case the banner renders no panel at all.
- */
-export interface StartupMap {
-    /** The discovered sections, in display order. */
-    readonly sections: readonly StartupSection[];
+
+function condenseChangelog(markdown: string, lastSeen?: string) {
+  if (lastSeen === void 0 || lastSeen.length === 0) return markdown.trim();
+  const lines = markdown.split("\n");
+  const kept: string[] = [];
+  for (const line of lines) {
+    const heading = /^##\s+\[?(\d+\.\d+\.\d+)\]?/.exec(line);
+    if (heading && heading[1] === lastSeen) break;
+    kept.push(line);
+  }
+  const joined = kept.join("\n").trim();
+  return joined.length > 0 ? joined : markdown.trim();
 }
-/**
- * The changelog survey the banner may render as a "What is new" block.
- *
- *   - `mode: "none"`     — no changelog to show (no file, or no version change).
- *   - `mode: "full"`     — the running version is newer than last-seen *and* the
- *     full body is worth showing; `markdown` carries it.
- *   - `mode: "condensed"`— a version change with no body to expand (or the body
- *     suppressed); only the one-line note is shown.
- */
-export type StartupChangelogMode = "none" | "full" | "condensed";
-/** The gathered changelog survey, with the running version it was keyed to. */
-export interface StartupChangelog {
-    /** Which of the three presentations the banner should render. */
-    readonly mode: StartupChangelogMode;
-    /** The running product version this survey was computed against. */
-    readonly version: string;
-    /** The condensed changelog body (present for `full`), markdown source. */
-    readonly markdown?: string;
+
+function reverseChangelogEntries(markdown: string) {
+  const isEntryHeading = (line: string) => /^##\s+\[?\d+\.\d+\.\d+\]?/.test(line);
+  const lines = markdown.split("\n");
+  const firstEntry = lines.findIndex(isEntryHeading);
+  if (firstEntry === -1) return markdown.trim();
+  const preamble = lines.slice(0, firstEntry).join("\n").trim();
+  const blocks: string[][] = [];
+  for (const line of lines.slice(firstEntry)) {
+    if (isEntryHeading(line)) blocks.push([line]);
+    else if (blocks.length > 0) blocks[blocks.length - 1].push(line);
+  }
+  blocks.reverse();
+  const body = blocks.map((block) => block.join("\n").trim()).filter((block) => block.length > 0).join("\n\n");
+  return preamble.length > 0 ? `${preamble}\n\n${body}` : body;
 }
-/** The per-line tone a startup notice carries. */
-export type StartupNoticeKind = "error" | "warning" | "info";
-/** One out-of-band notice the banner renders above the wordmark region. */
-export interface StartupNotice {
-    /** The tone the line is themed with. */
-    readonly kind: StartupNoticeKind;
-    /** The notice text. */
-    readonly text: string;
-}
-/** What {@link gatherStartup} is handed to compute the survey. */
-export interface StartupInputs {
-    /** The working directory the session is scoped to. */
-    readonly cwd: string;
-    /** The user's home directory (where global resources live). */
-    readonly home: string;
-    /** The running product version (for the changelog survey). */
-    readonly version: string;
-    /** The last version the user has already seen a changelog for, if any. */
-    readonly lastSeenVersion?: string;
-    /** Absolute path of the app-root `CHANGELOG.md`, if the app knows one. */
-    readonly changelogPath?: string;
-}
-/**
- * Gather the startup map: the context documents, skills, and prompt templates
- * the session opens with, each as a {@link StartupSection}. Empty sections are
- * dropped, so a brand-new checkout with nothing on disk yields `{ sections: [] }`
- * and the banner renders no panel.
- *
- * Pure with respect to its {@link StartupInputs}: only read-only filesystem
- * probes, no writes, no caching.
- *
- * @param inputs the roots and version context to survey against
- */
-export declare function gatherStartup(inputs: StartupInputs): StartupMap;
+
 /**
  * Gather the changelog survey for the banner.
- *
- * The presentation depends on the version delta:
- *   - no `CHANGELOG.md`, or the running version equals the last-seen version →
- *     `mode: "none"` (nothing shown);
- *   - a version change with a non-empty condensed body → `mode: "full"` and the
- *     body in `markdown`;
- *   - a version change whose condensed body is empty → `mode: "condensed"` (only
- *     the one-line "updated to" note).
- *
- * When the app does not track a last-seen version (`lastSeenVersion` absent), a
- * present `CHANGELOG.md` is always surfaced condensed so the note still appears.
- *
- * @param inputs the version context and optional changelog path
  */
-export declare function gatherChangelog(inputs: StartupInputs): StartupChangelog;
+export function gatherChangelog(inputs: StartupInputs): StartupChangelog {
+  const { version, lastSeenVersion, changelogPath } = inputs;
+  const none: StartupChangelog = { mode: "none", version };
+  if (changelogPath === void 0 || !existsSync(changelogPath)) return none;
+  if (lastSeenVersion !== void 0 && lastSeenVersion === version) return none;
+  let raw: string;
+  try {
+    raw = readFileSync(changelogPath, "utf-8");
+  } catch {
+    return none;
+  }
+  const condensed = condenseChangelog(raw, lastSeenVersion);
+  if (condensed.length === 0) {
+    return { mode: "condensed", version };
+  }
+  if (lastSeenVersion === void 0) {
+    return { mode: "condensed", version };
+  }
+  return { mode: "full", version, markdown: reverseChangelogEntries(condensed) };
+}
+
+/**
+ * One labelled group inside the startup map.
+ */
+export interface StartupSection {
+  readonly title: string;
+  readonly lines: readonly string[];
+  readonly count: number;
+}
+
+/**
+ * The gathered survey the banner renders as the "Startup Map" panel.
+ */
+export interface StartupMap {
+  readonly sections: readonly StartupSection[];
+}
+
+/**
+ * The changelog survey the banner may render as a "What is new" block.
+ */
+export type StartupChangelogMode = "none" | "full" | "condensed";
+
+export interface StartupChangelog {
+  readonly mode: StartupChangelogMode;
+  readonly version: string;
+  readonly markdown?: string;
+}
+
+/** The per-line tone a startup notice carries. */
+export type StartupNoticeKind = "error" | "warning" | "info";
+
+export interface StartupNotice {
+  readonly kind: StartupNoticeKind;
+  readonly text: string;
+}
+
+/** What {@link gatherStartup} is handed to compute the survey. */
+export interface StartupInputs {
+  readonly cwd: string;
+  readonly home: string;
+  readonly version: string;
+  readonly lastSeenVersion?: string;
+  readonly changelogPath?: string;
+}

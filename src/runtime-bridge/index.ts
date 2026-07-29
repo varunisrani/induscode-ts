@@ -15,9 +15,65 @@
  * import the routing surface from `src/runtime-bridge` rather than reaching into
  * individual modules.
  */
-export type { RuntimeAdapterId, RuntimeAuthMode, ExternalRuntimeSpec, RuntimeEndpointScheme, NormalizedEvent, NormalizedEventKind, NormalizedEventOf, FinishReason, BridgeFailure, BridgeEventSink, ChildMessage, ChildRequest, ChildTransport, ExchangeOptions, RuntimeBridge, RuntimeBroker, RuntimeRoute, Api, AssistantMessage, AssistantMessageEventStream, Context, KnownProvider, Model, SimpleStreamOptions, StopReason, ToolCall, } from "./contract";
-export { RUNTIME_ENDPOINT_SCHEME, runtimeEndpoint } from "./contract";
-export type { BridgeMessageSeed } from "./sink";
-export { createBridgeSink } from "./sink";
-export { claudeCliBridge, codexCliBridge, indusagiCliBridge, makeIndusagiCliBridge, BUILTIN_RUNTIME_SPECS, BUILTIN_ADAPTERS, builtinRuntimeSpec, annotateCard, withRuntimeEndpoint, specFromModel, type RuntimeAnnotatedModel, driveExchange, seedFromModel, type ChildParser, type ParseStep, } from "./bridges";
-export { createRuntimeBroker, runtimeSourceKey, RUNTIME_LINK_ENTRY, type RuntimeBrokerRuntime, type RuntimeBrokerDeps, type ChildTransportFactory, type TransportContext, type FrameworkStream, type RuntimeLink, type RuntimeLinkStore, type RuntimeLinkEntryTag, type ResumeEvent, } from "./broker";
+export type {
+  RuntimeAdapterId,
+  RuntimeAuthMode,
+  ExternalRuntimeSpec,
+  RuntimeEndpointScheme,
+  NormalizedEvent,
+  NormalizedEventKind,
+  NormalizedEventOf,
+  FinishReason,
+  BridgeFailure,
+  BridgeEventSink,
+  ChildMessage,
+  ChildRequest,
+  ChildTransport,
+  ExchangeOptions,
+  RuntimeBridge,
+  RuntimeBroker,
+  RuntimeRoute,
+  Api,
+  AssistantMessage,
+  AssistantMessageEventStream,
+  Context,
+  KnownProvider,
+  Model,
+  SimpleStreamOptions,
+  StopReason,
+  ToolCall,
+} from "./contract.js";
+export { RUNTIME_ENDPOINT_SCHEME, runtimeEndpoint } from "./contract.js";
+export type { BridgeMessageSeed } from "./sink.js";
+export { createBridgeSink } from "./sink.js";
+export {
+  claudeCliBridge,
+  codexCliBridge,
+  indusagiCliBridge,
+  makeIndusagiCliBridge,
+  BUILTIN_RUNTIME_SPECS,
+  BUILTIN_ADAPTERS,
+  builtinRuntimeSpec,
+  annotateCard,
+  withRuntimeEndpoint,
+  specFromModel,
+  type RuntimeAnnotatedModel,
+  driveExchange,
+  seedFromModel,
+  type ChildParser,
+  type ParseStep,
+} from "./bridges/index.js";
+export {
+  createRuntimeBroker,
+  runtimeSourceKey,
+  RUNTIME_LINK_ENTRY,
+  type RuntimeBrokerRuntime,
+  type RuntimeBrokerDeps,
+  type ChildTransportFactory,
+  type TransportContext,
+  type FrameworkStream,
+  type RuntimeLink,
+  type RuntimeLinkStore,
+  type RuntimeLinkEntryTag,
+  type ResumeEvent,
+} from "./broker.js";

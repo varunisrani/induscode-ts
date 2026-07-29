@@ -1,5 +1,3 @@
-// @ts-nocheck
-// Type declarations recovered from dist/types (no runtime body)
 /**
  * Boot helper: activate the addon host for a session and fold its tool
  * interceptors around the deck.
@@ -31,8 +29,14 @@
  * the load-bearing one — it is where the Wave 4 permission gate later registers
  * as a built-in interceptor rather than a parallel mechanism.
  */
-import { type AddonSurfaceBundle, type AgentTool, type InterceptorChain } from "../../addons";
-import type { BootContext } from "../contract";
+import {
+  type AddonSurfaceBundle,
+  type AgentTool,
+  type InterceptorChain,
+  createAddonHost,
+} from "../../addons/index.js";
+import type { BootContext } from "../contract.js";
+
 /**
  * Build and populate the addon host for a run, returning its wired
  * {@link AddonSurfaceBundle}.
@@ -48,7 +52,14 @@ import type { BootContext } from "../contract";
  * @param ctx the boot context whose invocation carries the run cwd
  * @returns the wired bundle (dispatch, interceptors, contributed commands/tools)
  */
-export declare function buildAddonHost(ctx: BootContext): Promise<AddonSurfaceBundle>;
+export async function buildAddonHost(ctx: BootContext): Promise<AddonSurfaceBundle> {
+  const host = createAddonHost({ handles: {} });
+  host.onFault(() => {
+    // swallow addon load faults so a broken addon cannot sink the session
+  });
+  return host.loadAll({ workspace: ctx.invocation.cwd ?? process.cwd() });
+}
+
 /**
  * Fold a bundle's {@link InterceptorChain} around every tool a stage matches.
  *
@@ -63,7 +74,13 @@ export declare function buildAddonHost(ctx: BootContext): Promise<AddonSurfaceBu
  * @param bundle the loaded addon bundle whose interceptor chain wraps the deck
  * @returns a new array: matched tools wrapped, unmatched tools identity-equal
  */
-export declare function wrapToolsWithAddons(tools: AgentTool[], bundle: AddonSurfaceBundle): AgentTool[];
+export function wrapToolsWithAddons(tools: AgentTool[], bundle: AddonSurfaceBundle): AgentTool[] {
+  const chain = bundle.interceptors;
+  return tools.map(
+    (tool) => chain.matches(tool.name) ? wrapOne(tool, chain) : tool,
+  );
+}
+
 /**
  * Wrap one tool so its `execute` runs through the interceptor chain.
  *
@@ -88,7 +105,33 @@ export declare function wrapToolsWithAddons(tools: AgentTool[], bundle: AddonSur
  * @param tool  the real tool to fold the chain around
  * @param chain the interceptor chain matching this tool's name
  */
-export declare function wrapOne(tool: AgentTool, chain: InterceptorChain): AgentTool;
+export function wrapOne(tool: AgentTool, chain: InterceptorChain): AgentTool {
+  const realExecute = tool.execute.bind(tool);
+  return {
+    ...tool,
+    async execute(toolCallId: string, params: unknown, signal?: AbortSignal, onUpdate?: unknown) {
+      const args = params ?? {};
+      const outcome = await chain.run(
+        { tool: tool.name, callId: toolCallId, args: args as Record<string, unknown> },
+        (next) => realExecute(toolCallId, next, signal as never, onUpdate as never),
+      );
+      if (outcome.blocked !== undefined) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: outcome.blocked.reason ?? "Blocked by an addon.",
+            },
+          ],
+          details: undefined,
+          isError: true,
+        };
+      }
+      return outcome.result ?? { content: [], details: undefined };
+    },
+  };
+}
+
 /**
  * Concatenate an addon bundle's contributed tools onto an existing deck, dropping
  * any whose name a deck tool already claims.
@@ -102,4 +145,9 @@ export declare function wrapOne(tool: AgentTool, chain: InterceptorChain): Agent
  * @param bundle the loaded addon bundle whose `tools` are appended
  * @returns the deck followed by the non-conflicting addon tools
  */
-export declare function concatAddonTools(deck: AgentTool[], bundle: AddonSurfaceBundle): AgentTool[];
+export function concatAddonTools(deck: AgentTool[], bundle: AddonSurfaceBundle): AgentTool[] {
+  if (bundle.tools.length === 0) return deck;
+  const claimed = new Set(deck.map((t) => t.name));
+  const fresh = bundle.tools.filter((t) => !claimed.has(t.name));
+  return fresh.length === 0 ? deck : [...deck, ...fresh];
+}

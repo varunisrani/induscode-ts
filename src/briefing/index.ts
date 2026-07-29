@@ -20,12 +20,12 @@
  * are added here as they land. Consumers import the briefing surface from
  * `src/briefing` rather than reaching into individual modules.
  */
-export type { BriefingContext, BriefingSection, Briefing, BriefingInputs, SubagentBrief, ContextDoc, MacroOrigin, Macro, MacroScope, MacroTokenKind, MacroToken, SkillFrontmatter, SkillCard, SkillOutcomeKind, SkillDiagnostic, SkillLoad, SgrState, SgrToken, SgrMutation, ExportTheme, Rgb, LuminanceLut, ThemeMode, ThemeBridge, TranscriptPart, WidgetRender, PublishOptions, ShellSlot, BriefingFaultKind, BriefingFault, AgentState, AgentTool, TextContent, ImageContent, } from "./contract";
-export { SKILL_NAME_LIMIT, SKILL_DESCRIPTION_LIMIT, SGR_INITIAL_STATE, FALLBACK_EXPORT_THEME, SHELL_SLOTS, briefingFault, } from "./contract";
-export { BRIEFING_SECTIONS, composeBriefing } from "./compose";
-export { scanMacroBody, resolveTokens, applyMacros, buildMacroScope, expandInvocation, loadMacros, readMacroFile, splitFrontmatter, } from "./macros";
-export type { LoadMacrosOptions, FrontmatterSplit } from "./macros";
-export { loadSkillCards, gatherSkillCards, modelInvocableCards, } from "./skills";
-export type { SkillRoot } from "./skills";
-export { gatherContextDocs } from "./context-docs";
-export type { GatherContextDocsOptions } from "./context-docs";
+export type { BriefingContext, BriefingSection, Briefing, BriefingInputs, SubagentBrief, ContextDoc, MacroOrigin, Macro, MacroScope, MacroTokenKind, MacroToken, SkillFrontmatter, SkillCard, SkillOutcomeKind, SkillDiagnostic, SkillLoad, SgrState, SgrToken, SgrMutation, ExportTheme, Rgb, LuminanceLut, ThemeMode, ThemeBridge, TranscriptPart, WidgetRender, PublishOptions, ShellSlot, BriefingFaultKind, BriefingFault, AgentState, AgentTool, TextContent, ImageContent, } from "./contract.js";
+export { SKILL_NAME_LIMIT, SKILL_DESCRIPTION_LIMIT, SGR_INITIAL_STATE, FALLBACK_EXPORT_THEME, SHELL_SLOTS, briefingFault, } from "./contract.js";
+export { BRIEFING_SECTIONS, composeBriefing, joinBlocks, bullets, escapeXml, TOOL_SUMMARIES } from "./compose.js";
+export { scanMacroBody, resolveTokens, applyMacros, buildMacroScope, expandInvocation, loadMacros, readMacroFile, splitFrontmatter, } from "./macros.js";
+export type { LoadMacrosOptions, FrontmatterSplit } from "./macros.js";
+export { loadSkillCards, gatherSkillCards, modelInvocableCards, } from "./skills.js";
+export type { SkillRoot } from "./skills.js";
+export { gatherContextDocs } from "./context-docs.js";
+export type { GatherContextDocsOptions } from "./context-docs.js";

@@ -16,13 +16,18 @@
  * land; consumers import the conductor surface from `src/conductor` rather than
  * reaching into individual modules.
  */
-export type { FaultKind, ConductorFault, SessionSignal, SignalKind, SignalOf, SignalHandler, TranscriptSchema, TranscriptRole, TranscriptEntry, SessionHead, ModelCardRef, MatchQuery, ConductorPhase, ConductorState, QueueMode, QueuedInput, SessionStats, ExecuteBashOptions, BashOutcome, SessionConductor, SessionConductorOptions, CondenseOutcome, AgentMessage, AgentTool, CanUseToolFn, ThinkingLevel, Model, Usage, KnownProvider, PermissionMode, } from "./contract";
-export { conductorFault, TRANSCRIPT_SCHEMA } from "./contract";
-export { createSessionConductor, reduceState, noopCondense, withGatewayBaseUrl, type AgentLike, type ConductorDeps, type CondenseFn, type RetryPolicy, } from "./conductor";
-export { SignalHub, translateAgentEvent, type SignalHubOptions } from "./signal-hub";
-export { ModelCatalog, ModelMatcher, canonicalId, toCardRef, type CatalogCard, type CatalogSource, type ResolveInput, } from "./catalog";
-export { TranscriptStore, memoryBackend, fsBackend, replay, type TranscriptBackend, type TranscriptState, type TranscriptClock, type TranscriptStoreOptions, } from "./transcript-store";
-export { parseSkillInvocation, type SkillInvocation } from "./skill-parse";
-export { resolveRuleDecision, parseRule, makeRule, toolMatchesRule, createPermissionGate, createSubagentPermissionGate, collectReadOnlyToolNames, allowAlwaysRuleStrings, isReadOnlyToolName, isEditToolName, READ_ONLY_TOOL_NAMES, EDIT_TOOL_NAMES, type PermissionBehavior, type PermissionRule, type PermissionDecision, type CanUseToolFn as PermissionCanUseToolFn, type ApprovalChoice, type ApprovalOutcome, type ApprovalResolver, type PermissionGateConfig, type SessionPermissionPolicy, } from "./permissions";
-export { parseBashCommand, catastrophicReason, isCatastrophicCommand, evaluateCatastrophic, bashSubcommandSubjects, type ParsedCommand, } from "./bash-guard";
-export { DiagnosticsEngine, createDiagnosticKey, deduplicateAndCap, formatDiagnosticsSummary, getSeveritySymbol, parseTscOutput, parseEslintOutput, runTscDiagnostics, runEslintDiagnostics, hasTsConfig, hasEslintConfig, isTypeScriptOrJs, areDiagnosticsEqual, MAX_PER_FILE, MAX_TOTAL, MAX_SUMMARY_CHARS, type Diagnostic, type DiagnosticFile, type DiagnosticSeverity, type DiagnosticsConfig, type DiagnosticRunner, type DedupOptions, type Position, } from "./diagnostics";
+export type { FaultKind, ConductorFault, SessionSignal, SignalKind, SignalOf, SignalHandler, TranscriptSchema, TranscriptRole, TranscriptEntry, SessionHead, ModelCardRef, MatchQuery, ConductorPhase, ConductorState, QueueMode, QueuedInput, SessionStats, ExecuteBashOptions, BashOutcome, SessionConductor, SessionConductorOptions, CondenseOutcome, AgentMessage, AgentTool, CanUseToolFn, ThinkingLevel, Model, Usage, KnownProvider, PermissionMode, } from "./contract.js";
+export { conductorFault, TRANSCRIPT_SCHEMA } from "./contract.js";
+export { createSessionConductor, reduceState, noopCondense, withGatewayBaseUrl, type AgentLike, type ConductorDeps, type CondenseFn, type RetryPolicy, } from "./conductor.js";
+export { SignalHub, translateAgentEvent, type SignalHubOptions } from "./signal-hub/index.js";
+export { ModelCatalog, ModelMatcher, canonicalId, toCardRef, type CatalogCard, type CatalogSource, type ResolveInput, } from "./catalog/index.js";
+export { TranscriptStore, memoryBackend, fsBackend, replay, type TranscriptBackend, type TranscriptState, type TranscriptClock, type TranscriptStoreOptions, } from "./transcript-store/index.js";
+export { parseSkillInvocation, type SkillInvocation } from "./skill-parse/index.js";
+export { resolveRuleDecision, parseRule, makeRule, toolMatchesRule, createPermissionGate, createSubagentPermissionGate, collectReadOnlyToolNames, allowAlwaysRuleStrings, isReadOnlyToolName, isEditToolName, READ_ONLY_TOOL_NAMES, EDIT_TOOL_NAMES, type PermissionBehavior, type PermissionRule, type PermissionDecision, type CanUseToolFn as PermissionCanUseToolFn, type ApprovalChoice, type ApprovalOutcome, type ApprovalResolver, type PermissionGateConfig, type SessionPermissionPolicy, } from "./permissions.js";
+export { parseBashCommand, catastrophicReason, isCatastrophicCommand, evaluateCatastrophic, bashSubcommandSubjects, type ParsedCommand, } from "./bash-guard.js";
+export { DiagnosticsEngine, createDiagnosticKey, deduplicateAndCap, formatDiagnosticsSummary, getSeveritySymbol, parseTscOutput, parseEslintOutput, runTscDiagnostics, runEslintDiagnostics, hasTsConfig, hasEslintConfig, isTypeScriptOrJs, areDiagnosticsEqual, MAX_PER_FILE, MAX_TOTAL, MAX_SUMMARY_CHARS, type Diagnostic, type DiagnosticFile, type DiagnosticSeverity, type DiagnosticsConfig, type DiagnosticRunner, type DedupOptions, type Position, } from "./diagnostics.js";
+export { provisionDeck } from "../capability-deck/provision.js";
+export { isPermissionMode } from "../settings/contract.js";
+export { RESTORED_FILE_PREFIX } from "../window-budget/rehydrate.js";
+export { readClipboardImage } from "../kit/clipboard-image.js";
+export { openInExternalEditor } from "../kit/external-editor.js";

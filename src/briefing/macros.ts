@@ -1,208 +1,97 @@
-// @ts-nocheck
-// Type declarations recovered from dist/types (no runtime body)
-/**
- * Macro loader + single-pass argument-template scanner.
- *
- * A macro is a named prompt body discovered from a `*.md` file under the user,
- * project, or an explicit path root. Invoking `/<name> rest-of-line` resolves
- * the body against the line's arguments, substituting the indus argument
- * placeholders.
- *
- * # Indus template format
- *
- * Indus's own placeholders use a double-curly `{{arg.…}}` form so they stand
- * out from ordinary shell-style text and never collide with stray `$` in prose.
- * Every placeholder is introduced with `{{arg.`, names one of a small set of
- * accessors, and closes with `}}`. Whitespace inside the braces is permitted
- * around the accessor and its numeric arguments but not required.
- *
- *   - `{{arg.1}}`, `{{arg.2}}`, …   — one positional argument (1-based).
- *   - `{{arg.all}}`                  — every positional argument, re-joined
- *                                      with single spaces (equivalent to the
- *                                      verbatim raw argument string for the
- *                                      common case where neither quoting nor
- *                                      runs of whitespace matter).
- *   - `{{arg.slice N L}}`            — at most `L` positionals starting at the
- *                                      1-based offset `N`, re-joined with
- *                                      single spaces.
- *   - `{{arg.slice N}}`              — positionals from `N` onward (1-based,
- *                                      inclusive).
- *   - `{{arg.rest N}}`               — positionals from `N` onward; an alias
- *                                      for `{{arg.slice N}}` that reads more
- *                                      naturally when "everything after the
- *                                      first few" is meant. `N` defaults to
- *                                      `2` (i.e. everything after `arg.1`)
- *                                      when omitted: `{{arg.rest}}`.
- *
- * A literal `{{` is written `{{{{` (doubled), so author-controlled body text
- * can still contain double-brace runs verbatim when needed.
- *
- * # Compatibility shim
- *
- * For backward compatibility with templates authored against the older
- * `$arg`-style syntax, a single-pass shim still recognises the legacy forms
- * and rewrites them on the fly:
- *
- *   - `$1`, `$2`, …    — one positional argument (1-based).
- *   - `$@`             — every positional, re-joined with single spaces.
- *   - `$ARGUMENTS`     — the whole original argument string, verbatim.
- *   - `${@:N}`         — positionals from N onward (1-based, inclusive).
- *   - `${@:N:L}`       — at most L positionals starting at N.
- *
- * Using any of these legacy forms invokes {@link reportLegacyUsage} so callers
- * can surface a deprecation notice in their UI; the expansion still produces
- * the expected text so existing macro files keep working.
- *
- * # Implementation discipline
- *
- * Substitution is **one left-to-right scan**, not a sequence of regex passes:
- * {@link scanMacroBody} walks the body character by character, emitting a flat
- * {@link MacroToken} stream (literal runs interleaved with positional / all /
- * slice references), and {@link applyMacros} resolves that stream against a
- * {@link MacroScope} and concatenates. A single scan means a character produced
- * by expanding one token can never be re-interpreted as the start of another —
- * the classic multi-pass footgun — and the tokenization is reusable (cache the
- * tokens, resolve many times).
- *
- * Loading mirrors the same discipline: {@link loadMacros} walks a directory's
- * direct `*.md` children (non-recursively, the slash-macro convention), splits
- * off optional YAML-ish frontmatter, derives a one-line description, and
- * returns {@link Macro}s tagged with their {@link MacroOrigin}.
- */
-import type { Macro, MacroOrigin, MacroScope, MacroToken } from "./contract";
-/** Install (or clear) the legacy-syntax reporter; used by hosts for warnings. */
-export declare function setLegacyMacroReporter(fn: ((kind: string, source: string) => void) | undefined): void;
-/**
- * Scan a macro body into a flat {@link MacroToken} stream in a single
- * left-to-right pass.
- *
- * The scanner accumulates ordinary characters into a pending literal run and
- * flushes that run whenever it recognises a placeholder. Placeholders use the
- * indus `{{arg.…}}` form by default and the compatibility `$arg` form via the
- * shim; see the module JSDoc for the full grammar.
- *
- * Any apparent placeholder that fails to parse (e.g. `${foo}`, a dangling `$`
- * at end of input, or a stray `{{` that does not open `{{arg.`) is treated as
- * literal text so the body survives untouched. The returned stream merges
- * adjacent literal characters into a single token.
- *
- * @param body the macro body text to tokenize
- * @returns the ordered token stream; resolve it with {@link applyMacros}
- */
-export declare function scanMacroBody(body: string): MacroToken[];
-/**
- * Build the argument environment a macro body resolves against from the raw
- * text that followed the command name.
- *
- * `raw` is kept verbatim; `args` is the whitespace-split positional vector;
- * `all` is the positionals re-joined with single spaces (the `{{arg.all}}`
- * expansion). The split is quote-aware: single- or double-quoted runs become
- * one argument with their surrounding quotes removed, so
- * `deploy "the staging box"` yields two args.
- *
- * @param raw the verbatim argument text following the command name
- * @returns a {@link MacroScope} ready for {@link applyMacros}
- */
-export declare function buildMacroScope(raw: string): MacroScope;
-/**
- * Resolve a token stream against a {@link MacroScope} and concatenate to the
- * expanded text.
- *
- * Each token contributes its resolved text:
- *
- *   - `literal`    → its verbatim run.
- *   - `positional` → the matching `args[index - 1]`, or empty when out of range.
- *   - `all`        → the full `scope.all` string.
- *   - `slice`      → `args` from the 1-based `start` for up to `length`,
- *     re-joined with single spaces; out-of-range or zero-length slices yield
- *     empty.
- *
- * Because resolution happens after the single scan, expanded argument text is
- * inserted as-is and is never re-scanned for further placeholders.
- *
- * @param tokens a stream from {@link scanMacroBody}
- * @param scope  the argument environment to resolve against
- * @returns the fully expanded macro text
- */
-export declare function resolveTokens(tokens: readonly MacroToken[], scope: MacroScope): string;
-/**
- * Expand a macro body against a raw argument line in one shot: scan, then
- * resolve.
- *
- * Convenience over {@link scanMacroBody} + {@link buildMacroScope} +
- * {@link resolveTokens} for callers that do not retain the token stream.
- *
- * @param body the macro body containing indus or legacy placeholders
- * @param raw  the verbatim argument text following the command name
- * @returns the expanded text
- */
-export declare function applyMacros(body: string, raw: string): string;
-/**
- * Expand an invocation line of the form `/<name> rest…` against a set of
- * loaded macros.
- *
- * If the line opens with `/` and names a known macro, the macro's body is
- * expanded against the remainder of the line. Otherwise the line is returned
- * unchanged — ordinary user turns pass straight through.
- *
- * @param line   the raw input line
- * @param macros the macros to resolve against (later entries do not override
- *               earlier ones; the first match by name wins)
- * @returns the expanded text, or the original line when no macro matches
- */
-export declare function expandInvocation(line: string, macros: readonly Macro[]): string;
-/** Options for {@link loadMacros}. */
-export interface LoadMacrosOptions {
-    /** Where the directory's macros are tagged as having come from. */
-    readonly origin?: MacroOrigin;
-    /** A label for the source, woven into derived descriptions (e.g. `"project"`). */
-    readonly label?: string;
+import { readFileSync, readdirSync, statSync } from "node:fs";
+import { basename, join } from "node:path";
+import { briefingFault } from "./contract.js";
+import type { Macro, MacroOrigin, MacroScope, MacroToken } from "./contract.js";
+
+export interface LoadMacrosOptions { readonly origin?: MacroOrigin; readonly label?: string; }
+export interface FrontmatterSplit { readonly frontmatter: Record<string, unknown>; readonly body: string; }
+
+const decimal = (ch: string): boolean => ch.charCodeAt(0) >= 48 && ch.charCodeAt(0) <= 57;
+const bareword = (ch: string): boolean => { const c = ch.charCodeAt(0); return (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || c === 95; };
+export const LEGACY_ALL_BAREWORD = ["A", "R", "G", "U", "M", "E", "N", "T", "S"].join("");
+export const DERIVED_DESCRIPTION_BUDGET = 72;
+let legacyReporter: ((kind: string, source: string) => void) | undefined;
+
+export function setLegacyMacroReporter(fn: ((kind: string, source: string) => void) | undefined): void { legacyReporter = fn; }
+export function reportLegacyUsage(kind: string, source: string): void { legacyReporter?.(kind, source); }
+export function readNumber(text: string, i: number): { value: number; next: number } { let j = i; while (j < text.length && decimal(text[j])) j++; return { value: Number.parseInt(text.slice(i, j), 10), next: j }; }
+export function readBareword(text: string, i: number): number { let j = i; while (j < text.length && bareword(text[j])) j++; return j; }
+export function skipInlineSpace(text: string, i: number): number { let j = i; while (j < text.length && (text[j] === " " || text[j] === "\t")) j++; return j; }
+
+type Scan = { token: MacroToken; next: number };
+type LegacyScan = { token: MacroToken | null; literal?: string; next: number };
+
+export function scanMacroBody(body: string): MacroToken[] {
+  const tokens: MacroToken[] = []; let literal = ""; let i = 0;
+  const flush = (): void => { if (literal) { tokens.push({ kind: "literal", text: literal }); literal = ""; } };
+  while (i < body.length) {
+    const ch = body[i];
+    if (ch === "{" && body[i + 1] === "{") {
+      if (body[i + 2] === "{" && body[i + 3] === "{") { literal += "{{"; i += 4; continue; }
+      const parsed = scanIndusForm(body, i);
+      if (parsed) { flush(); tokens.push(parsed.token); i = parsed.next; continue; }
+    } else if (ch === "$") {
+      const parsed = scanLegacyForm(body, i);
+      if (parsed) { flush(); if (parsed.token) tokens.push(parsed.token); else literal += parsed.literal ?? ""; i = parsed.next; continue; }
+    }
+    literal += ch; i++;
+  }
+  flush(); return tokens;
 }
-/**
- * Load the macros defined by the direct `*.md` children of a directory.
- *
- * Non-recursive by design: slash macros live as flat files in their root, unlike
- * skills which nest. A missing directory yields an empty list (a perfectly normal
- * "no user macros configured" case); a present-but-unreadable file raises a
- * `macro_invalid` {@link briefingFault} via {@link readMacroFile}.
- *
- * @param dir  the directory to scan for `*.md` macro files
- * @param opts origin tag and source label for the produced macros
- * @returns the loaded macros, in directory order, deduped by name (first wins)
- */
-export declare function loadMacros(dir: string, opts?: LoadMacrosOptions): Macro[];
-/**
- * Read and parse a single macro file into a {@link Macro}.
- *
- * The macro `name` is the file's basename without its `.md` suffix. Optional
- * leading frontmatter (a `---` fenced block) supplies a `description`; absent
- * that, a description is derived from the first non-blank body line, capped and
- * suffixed with the source `label`.
- *
- * @param path   absolute path of the macro file
- * @param origin origin tag to stamp on the macro
- * @param label  source label used when deriving a description
- * @returns the parsed macro
- * @throws a `macro_invalid` {@link briefingFault} when the file cannot be read
- */
-export declare function readMacroFile(path: string, origin: MacroOrigin, label: string): Macro;
-/** A parsed frontmatter block plus the body that followed it. */
-export interface FrontmatterSplit {
-    /** Flat key/value pairs read from the leading `---` block (empty when absent). */
-    readonly frontmatter: Record<string, unknown>;
-    /** The document body after the closing fence (or the whole text when absent). */
-    readonly body: string;
+
+export function scanIndusForm(text: string, start: number): Scan | null {
+  let i = skipInlineSpace(text, start + 2); if (text.slice(i, i + 4) !== "arg.") return null; i += 4;
+  const end = readBareword(text, i); const accessor = text.slice(i, end); i = end;
+  if (!accessor && decimal(text[i] ?? "")) { const num = readNumber(text, i); i = skipInlineSpace(text, num.next); return text[i] === "}" && text[i + 1] === "}" && num.value >= 1 ? { token: { kind: "positional", index: num.value }, next: i + 2 } : null; }
+  if (accessor === "all") { i = skipInlineSpace(text, i); return text[i] === "}" && text[i + 1] === "}" ? { token: { kind: "all" }, next: i + 2 } : null; }
+  if (accessor === "slice") {
+    i = skipInlineSpace(text, i); if (!decimal(text[i] ?? "")) return null; const startNum = readNumber(text, i); i = skipInlineSpace(text, startNum.next); let length: number | undefined;
+    if (decimal(text[i] ?? "")) { const len = readNumber(text, i); length = len.value; i = skipInlineSpace(text, len.next); }
+    if (text[i] !== "}" || text[i + 1] !== "}") return null;
+    return { token: length === undefined ? { kind: "slice", start: startNum.value } : { kind: "slice", start: startNum.value, length }, next: i + 2 };
+  }
+  if (accessor === "rest") { i = skipInlineSpace(text, i); let value = 2; if (decimal(text[i] ?? "")) { const num = readNumber(text, i); value = num.value; i = skipInlineSpace(text, num.next); } return text[i] === "}" && text[i + 1] === "}" ? { token: { kind: "slice", start: value }, next: i + 2 } : null; }
+  return null;
 }
-/**
- * Split a leading `---`-fenced frontmatter block off a markdown document.
- *
- * Recognises a block only when the very first line is exactly `---` and a later
- * line is exactly `---`. Inside, each `key: value` line becomes a flat string
- * entry (a small subset of YAML — enough for the `name`/`description`/`license`
- * keys these documents carry). When no well-formed block leads the text, the
- * frontmatter is empty and the body is the whole input.
- *
- * @param text the raw document text
- * @returns the parsed `{ frontmatter, body }`
- */
-export declare function splitFrontmatter(text: string): FrontmatterSplit;
+
+export function scanLegacyForm(text: string, start: number): LegacyScan | null {
+  const next = text[start + 1];
+  if (next === "$") return { token: null, literal: "$", next: start + 2 };
+  if (next && decimal(next)) { const num = readNumber(text, start + 1); if (num.value < 1) return null; reportLegacyUsage("positional", text.slice(start, num.next)); return { token: { kind: "positional", index: num.value }, next: num.next }; }
+  if (next === "@") { reportLegacyUsage("all", text.slice(start, start + 2)); return { token: { kind: "all" }, next: start + 2 }; }
+  if (next === "{") return scanLegacyBraceForm(text, start);
+  if (next && bareword(next)) { const end = readBareword(text, start + 1); if (text.slice(start + 1, end) === LEGACY_ALL_BAREWORD) { reportLegacyUsage("all", text.slice(start, end)); return { token: { kind: "all" }, next: end }; } }
+  return null;
+}
+
+export function scanLegacyBraceForm(text: string, start: number): LegacyScan | null {
+  let i = start + 2; if (text[i++] !== "@") return null;
+  if (text[i] === "}") { reportLegacyUsage("all", text.slice(start, i + 1)); return { token: { kind: "all" }, next: i + 1 }; }
+  if (text[i++] !== ":" || !decimal(text[i] ?? "")) return null; const startNum = readNumber(text, i); i = startNum.next; let length: number | undefined;
+  if (text[i] === ":") { i++; if (!decimal(text[i] ?? "")) return null; const len = readNumber(text, i); length = len.value; i = len.next; }
+  if (text[i] !== "}") return null; reportLegacyUsage("slice", text.slice(start, i + 1));
+  return { token: length === undefined ? { kind: "slice", start: startNum.value } : { kind: "slice", start: startNum.value, length }, next: i + 1 };
+}
+
+export function splitArguments(raw: string): string[] {
+  const out: string[] = []; let current = ""; let inWord = false; let quote: string | null = null;
+  for (const ch of raw) { if (quote) { if (ch === quote) quote = null; else current += ch; inWord = true; } else if (ch === '"' || ch === "'") { quote = ch; inWord = true; } else if (/\s/.test(ch)) { if (inWord) { out.push(current); current = ""; inWord = false; } } else { current += ch; inWord = true; } }
+  if (inWord) out.push(current); return out;
+}
+export function buildMacroScope(raw: string): MacroScope { const args = splitArguments(raw); return { args, all: args.join(" "), raw }; }
+export function resolveTokens(tokens: readonly MacroToken[], scope: MacroScope): string { return tokens.map((token) => { if (token.kind === "literal") return token.text; if (token.kind === "positional") return scope.args[token.index - 1] ?? ""; if (token.kind === "all") return scope.all; const from = Math.max(0, token.start - 1); return (token.length === undefined ? scope.args.slice(from) : scope.args.slice(from, from + Math.max(0, token.length))).join(" "); }).join(""); }
+export function applyMacros(body: string, raw: string): string { return resolveTokens(scanMacroBody(body), buildMacroScope(raw)); }
+export function firstSpaceIndex(value: string): number { for (let i = 0; i < value.length; i++) if (/\s/.test(value[i])) return i; return -1; }
+export function expandInvocation(line: string, macros: readonly Macro[]): string { if (!line.startsWith("/")) return line; const sliced = line.slice(1); const space = firstSpaceIndex(sliced); const name = space < 0 ? sliced : sliced.slice(0, space); const macro = macros.find((item) => item.name === name); return macro ? applyMacros(macro.body, space < 0 ? "" : sliced.slice(space + 1)) : line; }
+
+export function loadMacros(dir: string, opts: LoadMacrosOptions = {}): Macro[] {
+  const origin = opts.origin ?? "path"; const label = opts.label ?? origin; let entries: string[];
+  try { entries = readdirSync(dir); } catch { return []; }
+  const seen = new Set<string>(); const macros: Macro[] = [];
+  for (const entry of entries.sort()) { if (entry.startsWith(".") || !entry.toLowerCase().endsWith(".md")) continue; const path = join(dir, entry); try { if (!statSync(path).isFile()) continue; } catch { continue; } const macro = readMacroFile(path, origin, label); if (!seen.has(macro.name)) { seen.add(macro.name); macros.push(macro); } }
+  return macros;
+}
+export function readMacroFile(path: string, origin: MacroOrigin, label: string): Macro { let text: string; try { text = readFileSync(path, "utf8"); } catch (cause) { throw briefingFault("macro_invalid", `could not read macro file at ${path}`, cause); } const { frontmatter, body } = splitFrontmatter(text); const name = basename(path).replace(/\.md$/i, ""); const declared = typeof frontmatter.description === "string" ? frontmatter.description.trim() : ""; return { name, description: declared ? `${declared} (${label})` : deriveDescription(body, label), body, origin, source: path }; }
+export function deriveDescription(body: string, label: string): string { const first = body.split("\n").find((line) => line.trim())?.trim() ?? ""; const trimmed = first.length > DERIVED_DESCRIPTION_BUDGET ? `${first.slice(0, DERIVED_DESCRIPTION_BUDGET).trimEnd()}…` : first; return `${trimmed || "custom macro"} (${label})`; }
+export function splitFrontmatter(text: string): FrontmatterSplit { const lines = text.split("\n"); if (lines[0]?.trim() !== "---") return { frontmatter: {}, body: text }; const close = lines.findIndex((line, i) => i > 0 && line.trim() === "---"); if (close < 0) return { frontmatter: {}, body: text }; const frontmatter: Record<string, unknown> = {}; for (const line of lines.slice(1, close)) { if (!line.trim() || line.trimStart().startsWith("#")) continue; const colon = line.indexOf(":"); if (colon > 0) frontmatter[line.slice(0, colon).trim()] = unquoteScalar(line.slice(colon + 1).trim()); } return { frontmatter, body: lines.slice(close + 1).join("\n").replace(/^\n+/, "") }; }
+export function unquoteScalar(value: string): string { if (value.length >= 2 && ((value[0] === '"' && value.at(-1) === '"') || (value[0] === "'" && value.at(-1) === "'"))) return value.slice(1, -1); return value; }
