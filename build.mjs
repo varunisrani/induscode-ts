@@ -1,9 +1,11 @@
 // build.mjs — bundle indusagi-coding-agent with esbuild
 //
-// Produces three entry-point bundles in dist/:
+// Produces five entry-point bundles in dist/:
 //   dist/entry.js      — CLI runner (the `indus` / `indusagi` bin)
 //   dist/guardrails.js — guardrails subsystem
 //   dist/index.js      — library barrel
+//   dist/review-server.js — Supabase-backed GitHub review worker
+//   dist/review-agent.js  — embeddable review-agent API
 //
 // Note: src/ is already a parallel "bundled-with-types" tree (post-recovery).
 // This script does NOT regenerate src/ — it produces the .js bundles that
@@ -19,7 +21,7 @@ import { join } from "node:path";
 const outdir = "dist";
 if (existsSync(outdir)) {
   // Keep only the JS outputs we control; don't wipe other contents.
-  for (const f of ["entry.js", "guardrails.js", "index.js"]) {
+  for (const f of ["entry.js", "guardrails.js", "index.js", "review-server.js", "review-agent.js"]) {
     try { rmSync(`${outdir}/${f}`, { force: true }); } catch {}
   }
 }
@@ -42,6 +44,8 @@ await build({
     entry: "src/entry.ts",
     guardrails: "src/guardrails.ts",
     index: "src/index.ts",
+    "review-server": "src/review-agent/server.ts",
+    "review-agent": "src/review-agent/index.ts",
   },
   outdir,
   banner: {},
@@ -54,5 +58,6 @@ if (!entry.startsWith("#!")) {
   writeFileSync("dist/entry.js", entry);
 }
 chmodSync("dist/entry.js", 0o755);
+chmodSync("dist/review-server.js", 0o755);
 
-console.log("build ok → dist/entry.js dist/guardrails.js dist/index.js");
+console.log("build ok → dist/entry.js dist/guardrails.js dist/index.js dist/review-server.js dist/review-agent.js");

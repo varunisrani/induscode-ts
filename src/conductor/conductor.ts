@@ -3,8 +3,9 @@ import type { AgentEvent, AgentMessage, AgentTool, CanUseToolFn, ThinkingLevel }
 import { createZeroUsage } from "indusagi/ai";
 import type { Model, Usage } from "indusagi/ai";
 import * as path from "node:path";
+import { runShell } from "../kit/run-shell.js";
 import { conductorFault } from "./contract.js";
-import type { ApprovalResolver, ConductorFault, ConductorPhase, ConductorState, PermissionMode, SessionConductor, SessionConductorOptions, SessionHead } from "./contract.js";
+import type { ApprovalResolver, CodingAgentThinkingLevel, ConductorFault, ConductorPhase, ConductorState, PermissionMode, SessionConductor, SessionConductorOptions, SessionHead } from "./contract.js";
 import { ModelCatalog, ModelMatcher } from "./catalog/index.js";
 import type { CatalogCard } from "./catalog/index.js";
 import { SignalHub, translateAgentEvent } from "./signal-hub/index.js";
@@ -15,6 +16,7 @@ import { writePlan } from "../capability-deck/cards/plan-file.js";
 import { AUTO_CONDENSE_POLICY, isOverBudget } from "../window-budget/index.js";
 import { DiagnosticsEngine, formatDiagnosticsSummary, hasEslintConfig, hasTsConfig, isTypeScriptOrJs, runEslintDiagnostics, runTscDiagnostics } from "./diagnostics.js";
 import type { DiagnosticsConfig } from "./diagnostics.js";
+import { isReasoningEffortSupported, type CodingAgentModel } from "../models.js";
 
 export interface AgentLike {
   subscribe(fn: (event: AgentEvent) => void): () => void;
@@ -27,7 +29,7 @@ export interface AgentLike {
   setTools(tools: AgentTool[]): void;
   setThinkingLevel?(level: ThinkingLevel): void;
 }
-export interface CondenseOpts { readonly force?: boolean; readonly model?: Model<any>; readonly contextTokens?: number; readonly signal?: AbortSignal; readonly apiKey?: string }
+export interface CondenseOpts { readonly instructions?: string; readonly force?: boolean; readonly model?: Model<any>; readonly contextTokens?: number; readonly signal?: AbortSignal; readonly apiKey?: string }
 export type CondenseFn = (messages: AgentMessage[], opts?: CondenseOpts) => AgentMessage[] | Promise<AgentMessage[]>;
 export const noopCondense: CondenseFn = (messages) => messages;
 export interface RetryPolicy { readonly maxAttempts: number; readonly baseDelayMs: number }
@@ -62,7 +64,7 @@ export function reduceState(prev: ConductorState, action: StateAction): Conducto
 }
 
 const DEFAULT_RETRY = { maxAttempts: 2, baseDelayMs: 250 };
-const THINKING_LADDER: ThinkingLevel[] = ["off", "low", "medium", "high"];
+const DEFAULT_THINKING_LADDER: readonly CodingAgentThinkingLevel[] = ["off", "low", "medium", "high"];
 const PERMISSION_CYCLE: PermissionMode[] = ["default", "acceptEdits", "plan", "bypass"];
 
 function newSessionId(): string { return `s_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`; }
@@ -73,6 +75,10 @@ function accumulateUsage(a: Usage, b: Usage): Usage {
 function errorText(error: unknown): string { return error instanceof Error ? error.message : String(error); }
 function isTransient(error: unknown): boolean { const text = errorText(error).toLowerCase(); return ["429", "rate limit", "overloaded", "timeout", "timed out", "econnreset", "etimedout", "503", "502", "500", "unavailable", "temporarily"].some((part) => text.includes(part)); }
 function isOverloadFault(error: unknown): boolean { const text = errorText(error).toLowerCase(); return text.includes("529") || text.includes("overload"); }
+function thinkingLadderForModel(model: Model<any> | undefined): readonly CodingAgentThinkingLevel[] {
+  const efforts = (model as CodingAgentModel | undefined)?.reasoningEfforts;
+  return efforts?.length ? efforts : DEFAULT_THINKING_LADDER;
+}
 
 export function withGatewayBaseUrl<M extends { baseUrl: string; provider: string }>(model: M, gatewayBaseUrls: Record<string, string> | undefined): M {
   const url = gatewayBaseUrls?.[model.provider];
@@ -129,10 +135,12 @@ class SessionConductorImpl implements SessionConductor {
   #matcher?: ModelMatcher;
   #state: ConductorState;
   #busy = false;
+  #activeWork?: Promise<unknown>;
+  #shellAbort?: AbortController;
   #draining = false;
   #queue: { mode: "steer" | "followUp"; text: string }[] = [];
   #boundModel?: Model<any>;
-  #thinking: ThinkingLevel;
+  #thinking: CodingAgentThinkingLevel;
   #prePlanMode?: PermissionMode;
   #sessionName?: string;
   #gatewayBaseUrls?: Record<string, string>;
@@ -159,12 +167,22 @@ class SessionConductorImpl implements SessionConductor {
   clearQueue() { this.#queue.length = 0; this.#hub.emit({ kind: "queue", count: 0 }); }
   dequeueLast() { const item = this.#queue.pop(); if (item) this.#hub.emit({ kind: "queue", count: this.#queue.length }); return item?.text; }
   steerNow() { const item = this.#queue.pop(); if (!item) return false; this.#queue.unshift({ mode: "steer", text: item.text }); this.agent.abort(); return true; }
-  abort() { this.clearQueue(); this.#condenseAbort?.abort(); this.agent.abort(); const fault = conductorFault("aborted", "turn aborted by caller"); this.#dispatch({ type: "fault", fault }); this.#hub.emit({ kind: "fault", fault }); this.#hub.emit({ kind: "idle" }); }
+  abort() { this.clearQueue(); this.#condenseAbort?.abort(); this.#shellAbort?.abort(); this.agent.abort(); const fault = conductorFault("aborted", "turn aborted by caller"); this.#dispatch({ type: "fault", fault }); this.#hub.emit({ kind: "fault", fault }); this.#hub.emit({ kind: "idle" }); }
 
   async submit(input: string) {
     if (this.#busy) { this.enqueue(input); return this.#state; }
     this.#busy = true;
-    try { await this.#runTurn(input); await this.#drainQueue(); return this.#state; } finally { this.#busy = false; }
+    const work = (async () => {
+      try { await this.#runTurn(input); await this.#drainQueue(); return this.#state; }
+      finally { this.#busy = false; }
+    })();
+    this.#activeWork = work;
+    return work;
+  }
+  async #stopWork() {
+    if (!this.#busy) return;
+    this.abort();
+    await this.#activeWork;
   }
   async #drainQueue() { if (this.#draining) return; this.#draining = true; try { while (this.#queue.length) { const index = this.#queue.findIndex((item) => item.mode === "steer"); const item = index >= 0 ? this.#queue.splice(index, 1)[0] : this.#queue.shift()!; this.#hub.emit({ kind: "queue", count: this.#queue.length }); await this.#runTurn(item.text); } } finally { this.#draining = false; } }
   async #runTurn(input: string) {
@@ -196,30 +214,68 @@ class SessionConductorImpl implements SessionConductor {
   }
 
   selectModel(id: string) { const card = this.#matcher?.resolveCard(id); if (!card) { const fault = conductorFault("model", `no model matches "${id}"`); this.#dispatch({ type: "fault", fault }); this.#hub.emit({ kind: "fault", fault }); return; } this.#applyModel(card); }
-  cycleModel(id: string) { this.selectModel(id); }
+  cycleModel(id: string, direction: -1 | 1 = 1) {
+    if (id.trim()) { this.selectModel(id); return; }
+    const cards = this.availableModels();
+    if (!cards.length) return;
+    const at = cards.findIndex(card => card.id === this.#state.modelId);
+    const index = at < 0 ? 0 : (at + direction + cards.length) % cards.length;
+    this.selectModel(cards[index].id);
+  }
   #applyModel(card: CatalogCard) { const model = withGatewayBaseUrl(card.model, this.#gatewayBaseUrls); this.agent.setModel(model); this.#boundModel = model; this.#dispatch({ type: "model", modelId: card.id }); }
   updateGatewayBaseUrls(map: Record<string, string>) { this.#gatewayBaseUrls = map; this.selectModel(this.#state.modelId); }
   registerTools(tools: AgentTool[]) { this.agent.setTools([...this.#deckTools, ...tools]); }
 
-  async condense() { if (this.#busy) return "busy" as const; this.#busy = true; this.#condenseAbort = new AbortController(); try { const result = await this.#runCondense(true, this.#condenseAbort.signal); await this.#drainQueue(); return result; } finally { this.#busy = false; this.#condenseAbort = undefined; } }
+  async condense(instructions?: string) {
+    if (this.#busy) return "busy" as const;
+    this.#busy = true; this.#condenseAbort = new AbortController();
+    const work = (async () => {
+      try { const result = await this.#runCondense(true, this.#condenseAbort!.signal, instructions); await this.#drainQueue(); return result; }
+      finally { this.#busy = false; this.#condenseAbort = undefined; }
+    })();
+    this.#activeWork = work;
+    return work;
+  }
   cancelCondense() { this.#condenseAbort?.abort(); }
-  async #runCondense(force: boolean, signal?: AbortSignal) {
+  async #runCondense(force: boolean, signal?: AbortSignal, instructions?: string) {
     const before = [...this.agent.state.messages]; this.#dispatch({ type: "phase", phase: "condensing" });
-    try { const after = await (this.deps.condense ?? noopCondense)(before, { force, model: this.#boundModel, contextTokens: this.#state.contextTokens, signal }); if (signal?.aborted) return "cancelled" as const; if (after.length >= before.length) { this.#dispatch({ type: "settled" }); return "nothing" as const; } this.agent.replaceMessages(after); await this.store.reset(); for (let i = 0; i < after.length; i++) await this.store.append(after[i], i === 0 ? "condense" : undefined); this.#dispatch({ type: "head", head: this.store.head }); this.#hub.emit({ kind: "compacted", manual: force }); this.#dispatch({ type: "settled" }); return "condensed" as const; } catch (error) { const fault = conductorFault("overflow", "auto-condense failed", error); this.#dispatch({ type: "fault", fault }); this.#hub.emit({ kind: "fault", fault }); return "failed" as const; }
+    try { const after = await (this.deps.condense ?? noopCondense)(before, { force, model: this.#boundModel, contextTokens: this.#state.contextTokens, signal, instructions }); if (signal?.aborted) { this.#dispatch({type:"settled"}); this.#hub.emit({kind:"idle"}); return "cancelled" as const; } if (after.length >= before.length) { this.#dispatch({ type: "settled" }); return "nothing" as const; } this.agent.replaceMessages(after); await this.store.reset(); for (let i = 0; i < after.length; i++) await this.store.append(after[i], i === 0 ? "condense" : undefined); this.#dispatch({ type: "head", head: this.store.head }); this.#hub.emit({ kind: "compacted", manual: force }); this.#dispatch({ type: "settled" }); return "condensed" as const; } catch (error) { const fault = conductorFault("overflow", "auto-condense failed", error); this.#dispatch({ type: "fault", fault }); this.#hub.emit({ kind: "fault", fault }); return "failed" as const; }
   }
 
   async fork(id: string) { await this.#move(id, `cannot fork from "${id}"`); }
   async navigateTree(id: string) { await this.#move(id, `cannot navigate to "${id}"`); }
-  async #move(id: string, message: string) { try { await this.store.branchAt(id); this.agent.replaceMessages(this.store.messages()); this.#dispatch({ type: "head", head: this.store.head }); this.#dispatch({ type: "settled" }); this.#hub.emit({ kind: "idle" }); } catch (error) { const fault = conductorFault("persistence", message, error); this.#dispatch({ type: "fault", fault }); this.#hub.emit({ kind: "fault", fault }); } }
+  async #move(id: string, message: string) { try { await this.#stopWork(); await this.store.branchAt(id); this.agent.replaceMessages(this.store.messages()); this.#dispatch({ type: "head", head: this.store.head }); this.#dispatch({ type: "settled" }); this.#hub.emit({ kind: "reset" }); this.#hub.emit({ kind: "idle" }); } catch (error) { const fault = conductorFault("persistence", message, error); this.#dispatch({ type: "fault", fault }); this.#hub.emit({ kind: "fault", fault }); } }
   async restoreCode(id: string) { return this.options.checkpoint?.restore(id) ?? []; }
   async codeRestoreInfo(id: string) { return { canRestore: this.options.checkpoint?.hasSnapshot(id) ?? false }; }
-  async executeBash(command: string, opts: { excludeFromContext?: boolean } = {}) { const { spawn } = await import("node:child_process"); const outcome = await new Promise<{ output: string; exitCode: number }>((resolve) => { const child = spawn(command, { cwd: this.#workspace, shell: true }); let output = ""; child.stdout?.on("data", (chunk) => output += String(chunk)); child.stderr?.on("data", (chunk) => output += String(chunk)); child.on("error", (error) => resolve({ output: output + errorText(error), exitCode: 1 })); child.on("close", (code) => resolve({ output, exitCode: code ?? 1 })); }); if (!opts.excludeFromContext) await this.store.append({ role: "user", content: `$ ${command}\n${outcome.output}`.trimEnd(), timestamp: Date.now() } as AgentMessage, "note"); return outcome; }
+  async executeBash(command: string, opts: { excludeFromContext?: boolean; signal?: AbortSignal } = {}) {
+    if (this.#busy) throw new Error("A turn is running — stop it before running a shell command.");
+    this.#busy = true; this.#shellAbort = new AbortController();
+    const signal = opts.signal ? AbortSignal.any([opts.signal, this.#shellAbort.signal]) : this.#shellAbort.signal;
+    const work = (async () => {
+      try {
+        this.#dispatch({type:"phase",phase:"tooling"});
+        const outcome = await runShell(command, this.#workspace, signal);
+        if (!opts.excludeFromContext) {
+          const message: AgentMessage = {role:"user",content:`$ ${command}\n${outcome.output}`.trimEnd(),timestamp:Date.now()};
+          const entry = await this.store.append(message, "note");
+          this.agent.replaceMessages([...this.agent.state.messages, message]);
+          this.#dispatch({type:"head",head:this.store.head});
+          this.#hub.emit({kind:"persisted",entryId:entry.id});
+        }
+        this.#dispatch({type:"settled"}); this.#hub.emit({kind:"idle"});
+        await this.#drainQueue();
+        return outcome;
+      } finally { this.#busy = false; this.#shellAbort = undefined; }
+    })();
+    this.#activeWork = work;
+    return work;
+  }
 
   stats() { const messages = this.agent.state.messages; let userMessages = 0, assistantMessages = 0, toolCalls = 0, toolResults = 0; for (const message of messages) { if (message.role === "user") userMessages++; else if (message.role === "assistant") { assistantMessages++; for (const part of message.content ?? []) if (typeof part === "object" && part && part.type === "toolCall") toolCalls++; } else if (message.role === "toolResult") toolResults++; } const usage = this.#state.usage; return { sessionId: this.#state.head.sessionId, userMessages, assistantMessages, toolCalls, toolResults, totalMessages: messages.length, tokens: { input: usage.input, output: usage.output, cacheRead: usage.cacheRead, cacheWrite: usage.cacheWrite, total: usage.totalTokens }, cost: usage.cost.total }; }
   costReport() { const stats = this.stats(); return [`Total cost:            $${stats.cost.toFixed(4)}`, `Total tokens:          ${stats.tokens.total}`, `  Input:               ${stats.tokens.input}`, `  Output:              ${stats.tokens.output}`, `  Cache read:          ${stats.tokens.cacheRead}`, `  Cache write:         ${stats.tokens.cacheWrite}`].join("\n"); }
   thinkingLevel() { return this.#thinking; }
-  setThinkingLevel(level: ThinkingLevel) { this.#thinking = level; this.agent.setThinkingLevel?.(level); }
-  cycleThinkingLevel() { const next = THINKING_LADDER[(THINKING_LADDER.indexOf(this.#thinking) + 1) % THINKING_LADDER.length]; this.setThinkingLevel(next); return next; }
+  setThinkingLevel(level: CodingAgentThinkingLevel) { if (!isReasoningEffortSupported(this.#boundModel?.id, level)) return; this.#thinking = level; this.agent.setThinkingLevel?.(level as ThinkingLevel); }
+  cycleThinkingLevel() { const ladder = thinkingLadderForModel(this.#boundModel); const next = ladder[(ladder.indexOf(this.#thinking) + 1) % ladder.length]; this.setThinkingLevel(next); return next; }
   permissionMode() { return this.modeHolder.mode; }
   setPermissionMode(mode: PermissionMode) { this.modeHolder.mode = mode; }
   setApprovalResolver(resolver: ApprovalResolver | undefined) { this.approvalHolder.resolver = resolver; }
@@ -228,7 +284,11 @@ class SessionConductorImpl implements SessionConductor {
   cyclePermissionMode() { const current = this.modeHolder.mode === "bypassPermissions" ? "bypass" : this.modeHolder.mode; const next = PERMISSION_CYCLE[(PERMISSION_CYCLE.indexOf(current) + 1) % PERMISSION_CYCLE.length]; this.setPermissionMode(next); return next; }
   sessionName() { return this.#sessionName; }
   setSessionName(name: string) { this.#sessionName = name; }
-  async resume(id: string) { if (!await this.store.load(id)) { const fault = conductorFault("persistence", `no session "${id}" to resume`); this.#dispatch({ type: "fault", fault }); this.#hub.emit({ kind: "fault", fault }); return; } this.agent.replaceMessages(this.store.messages()); this.#state = { ...this.#state, head: this.store.head, usage: this.store.usage ?? createZeroUsage(), phase: "idle" }; this.#hub.emit({ kind: "idle" }); }
-  async newSession() { this.agent.abort(); this.agent.replaceMessages([]); this.store.startNewSession(newSessionId()); this.#queue.length = 0; this.#sessionName = undefined; this.#state = { phase: "idle", head: this.store.head, usage: createZeroUsage(), contextTokens: 0, modelId: this.#state.modelId }; this.#hub.emit({ kind: "idle" }); }
-  #dispatch(action: StateAction) { this.#state = reduceState(this.#state, action); }
+  async resume(id: string) { await this.#stopWork(); if (!await this.store.load(id)) { const fault = conductorFault("persistence", `no session "${id}" to resume`); this.#dispatch({ type: "fault", fault }); this.#hub.emit({ kind: "fault", fault }); return; } this.agent.replaceMessages(this.store.messages()); this.#state = { ...this.#state, head: this.store.head, usage: this.store.usage ?? createZeroUsage(), phase: "idle" }; this.#hub.emit({kind:"reset"}); this.#hub.emit({ kind: "idle" }); }
+  async newSession() { await this.#stopWork(); this.agent.replaceMessages([]); this.store.startNewSession(newSessionId()); this.#queue.length = 0; this.#sessionName = undefined; this.#state = { phase: "idle", head: this.store.head, usage: createZeroUsage(), contextTokens: 0, modelId: this.#state.modelId }; this.#hub.emit({kind:"reset"}); this.#hub.emit({ kind: "idle" }); }
+  #dispatch(action: StateAction) {
+    const phase = this.#state.phase;
+    this.#state = reduceState(this.#state, action);
+    if (phase !== this.#state.phase) this.#hub.emit({kind:"phase",phase:this.#state.phase});
+  }
 }

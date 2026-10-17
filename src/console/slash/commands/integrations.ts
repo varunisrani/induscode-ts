@@ -3,6 +3,7 @@
  * clipboard / export / share I/O verbs.
  */
 import { spawnSync } from "node:child_process";
+import { getEnvApiKey } from "indusagi/ai";
 import { readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
@@ -10,6 +11,7 @@ import { createMCPAgentToolFactory, loadMCPConfig, MCPClientPool } from "indusag
 import { createComposioGateway } from "indusagi/connectors-saas";
 import type { SlashCommand, SlashContext } from "../../contract.js";
 import { FAMILY, HANDLED, familyRunner, info, warn, splitVerb } from "./shared.js";
+import type { TranscriptEntry } from "../../../transcript-export/publish.js";
 import { publishTranscript } from "../../../transcript-export/index.js";
 import { APP_NOVEL_CARDS, memoryCard } from "../../../capability-deck/index.js";
 import { getServerToken, hasValidServerToken, INDUS_SERVER_URL } from "../../../boot/server-token.js";
@@ -48,7 +50,7 @@ function writeClipboard(text: string): boolean {
   return false;
 }
 
-function lastAssistantText(messages: any[]): string {
+function lastAssistantText(messages: readonly any[]): string {
   for (let i = messages.length - 1; i >= 0; i--) {
     const message = messages[i];
     if (message.role !== "assistant") continue;
@@ -66,11 +68,12 @@ function lastAssistantText(messages: any[]): string {
   return "";
 }
 
-function toPublishRole(role: string): string {
-  return PUBLISH_ROLES.has(role) ? role : "note";
+function toPublishRole(role: string): TranscriptEntry["role"] {
+  if (role === "toolResult") return "tool";
+  return PUBLISH_ROLES.has(role) ? role as TranscriptEntry["role"] : "note";
 }
 
-function toPublishEntries(messages: any[]) {
+function toPublishEntries(messages: readonly any[]) {
   return messages.map((message) => {
     const m = message;
     return {
@@ -541,16 +544,12 @@ function runLogin(ctx: SlashContext) {
   return HANDLED;
 }
 
-function hasLocalProviderKey(provider: string) {
-  if (provider.length === 0) return false;
+async function hasLocalProviderKey(provider: string, ctx: SlashContext) {
+  if (!provider) return false;
   try {
-    const file = join(homedir(), ".indusagi", "agent", "auth.json");
-    const vault = JSON.parse(readFileSync(file, "utf8"));
-    const entry = vault[provider];
-    return entry !== null && typeof entry === "object" && Object.keys(entry).length > 0;
-  } catch {
-    return false;
-  }
+    if (getEnvApiKey(provider)) return true;
+    return (await ctx.services?.vault.listAccounts(provider) ?? []).length > 0;
+  } catch { return false; }
 }
 
 function runStatus(ctx: SlashContext) {
@@ -564,7 +563,7 @@ function runStatus(ctx: SlashContext) {
       signedIn = false;
     }
     const eligible = isGatewayEligibleProvider(provider);
-    const localKey = hasLocalProviderKey(provider);
+    const localKey = await hasLocalProviderKey(provider, ctx);
     const viaServer = signedIn && eligible && !localKey;
     if (viaServer) {
       ctx.setStatus(info(`● server tier — ${modelId} routing via ${INDUS_SERVER_URL} (signed in)`));

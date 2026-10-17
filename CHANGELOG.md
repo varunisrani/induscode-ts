@@ -1,5 +1,32 @@
 # Changelog
 
+## [0.2.12]
+
+### Fixed
+- **One-shot NDJSON routing**: combining `--print --json` now runs one-shot mode with structured signal output instead of selecting the stdin-driven RPC mode.
+- **Structured tool signal contract**: `tool_start` and `tool_end` types now include the arguments, result, and error fields already emitted at runtime.
+
+## [0.2.11]
+
+### Fixed
+- **Fatal startup visibility**: uncaught boot failures now print their actual message and exit with status `1` instead of producing an empty failure log.
+
+## [0.2.10]
+
+### Fixed
+- **OpenAI browser sign-in**: consumes `indusagi@0.13.10`, whose callback server falls back from port `1455` to the registered port `1457` when needed.
+- **OAuth recovery input**: labels the manual field accurately so users can paste either an authorization code or the complete redirect URL.
+- **Version display**: startup banner and `--version` now match package version `0.2.10`.
+
+## [0.2.6]
+
+### Fixed
+- **Auditable NDJSON tool events**: `tool_start` now includes complete tool arguments. `tool_end` now includes the tool result and explicit error state so Harbor can produce complete ATIF v1.7 trajectories.
+- **Declaration parsing**: removed the misplaced runtime shebang from the declaration-only entry file so TypeScript can continue past that parser error.
+
+### Changed
+- **Version bump**: updated the package version to `0.2.6` for the Terminal-Bench 2.1 integration.
+
 ## [0.2.4]
 
 ### Added

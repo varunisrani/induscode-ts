@@ -2,7 +2,10 @@
  * Picker overlays — the selection dialogs raised over the transcript.
  */
 import { useEffect, useState } from "indusagi/react-host";
-import { ScopedModelsDialog, ThemeDialog, type Model } from "indusagi/react-ink";
+import { ScopedModelsDialog, ThemeDialog } from "indusagi/react-ink";
+import type { Model } from "indusagi/ai";
+import type { ThemeScheme } from "../contract.js";
+import type { Preferences, SettingKey } from "../../settings/contract.js";
 import { jsx } from "indusagi/react-host/jsx-runtime";
 import type { ConsoleDispatch, InkThemeAdapter, ModalState, OverlayServices } from "../contract.js";
 import { DEFAULT_SCHEME, isThemeScheme } from "../contract.js";
@@ -12,6 +15,15 @@ import { THEME_SCHEMES } from "../theme/index.js";
 import { ModelBoard, SettingsBoard } from "./boards.js";
 
 const TOGGLE_VALUES = ["on", "off"];
+
+function saveSetting<K extends SettingKey>(settings: OverlayServices["settings"], key: K, value: Preferences[K]) {
+  const previous = settings.get(key);
+  try { settings.set(key, value); settings.save(); }
+  catch (error) { settings.set(key, previous); throw error; }
+}
+function reportError(dispatch: ConsoleDispatch, error: unknown) {
+  dispatch({type:"status:set",status:{kind:"error",text:error instanceof Error ? error.message : String(error)}});
+}
 
 function refToModel(ref: any): Model<any> {
   return {
@@ -37,7 +49,7 @@ function listModels(services: OverlayServices): Model<any>[] {
 }
 
 function ModelPicker(props: OverlayGroupProps) {
-  const { services, theme, closeModal } = props;
+  const { services, theme, closeModal, dispatch } = props;
   const authed = useAuthenticatedProviders(services);
   if (!services) return null;
   const all = listModels(services);
@@ -48,8 +60,8 @@ function ModelPicker(props: OverlayGroupProps) {
     onSelect: (model: Model<any>) => {
       try {
         services.conductor.selectModel(model.id);
-      } catch {
-        // ignore
+      } catch (error) {
+        reportError(dispatch, error);
       }
       closeModal();
     },
@@ -72,8 +84,7 @@ function ScopedModelPicker(props: OverlayGroupProps) {
   useEffect(() => {
     if (!services || payload.intent !== "reset") return;
     try {
-      services.settings.set("enabledModels", []);
-      services.settings.save();
+      saveSetting(services.settings, "enabledModels", []);
       dispatch({
         type: "status:set",
         status: { kind: "info", text: "Per-scope model overrides cleared." }
@@ -103,10 +114,9 @@ function ScopedModelPicker(props: OverlayGroupProps) {
       try {
         const all = models.map((model) => model.id);
         const next = ids.length === all.length ? [] : ids;
-        services.settings.set("enabledModels", next);
-        services.settings.save();
-      } catch {
-        // ignore
+        saveSetting(services.settings, "enabledModels", next);
+      } catch (error) {
+        reportError(dispatch, error);
       }
       closeModal();
     },
@@ -114,7 +124,7 @@ function ScopedModelPicker(props: OverlayGroupProps) {
   });
 }
 
-function currentScheme(services: OverlayServices): string {
+function currentScheme(services: OverlayServices): ThemeScheme {
   try {
     const stored = services.settings.get("colourScheme");
     if (typeof stored === "string" && isThemeScheme(stored)) return stored;
@@ -136,12 +146,11 @@ function ThemePicker(props: OverlayGroupProps) {
     themes: [...THEME_SCHEMES],
     onSelect: (name: string) => {
       if (isThemeScheme(name)) {
-        dispatch({ type: "scheme:set", scheme: name });
         try {
-          services.settings.set("colourScheme", name);
-          services.settings.save();
-        } catch {
-          // ignore
+          saveSetting(services.settings, "colourScheme", name);
+          dispatch({ type: "scheme:set", scheme: name });
+        } catch (error) {
+          reportError(dispatch, error);
         }
       }
       closeModal();
@@ -157,20 +166,19 @@ function SettingsPicker(props: OverlayGroupProps) {
   const [, setVersion] = useState(0);
   const bump = () => setVersion((n) => n + 1);
   const onOff = (flag: boolean) => (flag ? "on" : "off");
-  const toggleRow = (id: string, key: string, label: string, description: string, live?: () => void) => ({
+  const toggleRow = (id: string, key: SettingKey, label: string, description: string, live?: (enabled: boolean) => void) => ({
     id,
     label,
     description,
     value: onOff(settings.get(key) as boolean),
     values: [...TOGGLE_VALUES],
     onChange: (value: string) => {
-      settings.set(key, value === "on");
-      settings.save();
-      live?.();
+      saveSetting(settings, key, value === "on");
+      live?.(value === "on");
       bump();
     }
   });
-  const deliveryRow = (id: string, key: string, label: string, description: string) => ({
+  const deliveryRow = (id: string, key: SettingKey, label: string, description: string) => ({
     id,
     label,
     description,
@@ -178,8 +186,7 @@ function SettingsPicker(props: OverlayGroupProps) {
     values: [...DELIVERY_MODES],
     onChange: (value: string) => {
       if (isDeliveryMode(value)) {
-        settings.set(key, value);
-        settings.save();
+        saveSetting(settings, key, value);
       }
       bump();
     }
@@ -193,16 +200,15 @@ function SettingsPicker(props: OverlayGroupProps) {
       value: settings.get("colourScheme") as string,
       values: [...THEME_SCHEMES],
       onChange: (value: string) => {
-        settings.set("colourScheme", value);
-        settings.save();
+        saveSetting(settings, "colourScheme", value);
         if (isThemeScheme(value)) dispatch({ type: "scheme:set", scheme: value });
         bump();
       }
     });
-    items.push(toggleRow("show-images", "showImages", "Show images", "Render inline image content in the transcript.", () => dispatch({ type: "toggle:images" })));
+    items.push(toggleRow("show-images", "showImages", "Show images", "Render inline image content in the transcript.", value => dispatch({ type: "display:set", key: "showImages", value })));
     items.push(toggleRow("image-auto-resize", "imageAutoResize", "Auto-resize images", "Shrink oversized images to fit before handing them to a provider."));
     items.push(toggleRow("block-images", "blockImages", "Block images", "Withhold image content from providers entirely."));
-    items.push(toggleRow("show-reasoning", "showReasoning", "Show reasoning", "Stream the model's reasoning / thinking text as it arrives.", () => dispatch({ type: "toggle:reasoning" })));
+    items.push(toggleRow("show-reasoning", "showReasoning", "Show reasoning", "Stream the model's reasoning / thinking text as it arrives.", value => dispatch({ type: "display:set", key: "showReasoning", value })));
     items.push(toggleRow("skill-commands", "enableSkillCommands", "Skill commands", "Surface discovered skills as their own slash commands."));
     items.push(deliveryRow("steering-mode", "steeringMode", "Steering mode", "Whether queued steering corrections release one at a time or all at once."));
     items.push(deliveryRow("follow-up-mode", "followUpMode", "Follow-up mode", "Whether queued follow-up prompts release one at a time or all at once."));
@@ -211,7 +217,7 @@ function SettingsPicker(props: OverlayGroupProps) {
     items.push(toggleRow("quiet-startup", "quietStartup", "Quiet startup", "Suppress the banner and tips shown on a normal interactive launch."));
     items.push(toggleRow("logo-sweep", "logoSweep", "Logo sweep", "Tint the startup wordmark and emblem along a static colour gradient."));
     items.push(toggleRow("reduced-motion", "reducedMotion", "Reduced motion", "Suppress motion-flavoured flourishes such as the logo colour sweep."));
-    items.push(toggleRow("hardware-cursor", "showHardwareCursor", "Hardware cursor", "Reveal the terminal's own cursor instead of the software-drawn caret."));
+    // Ink 5 owns the hardware cursor; do not offer a nonfunctional switch.
     items.push({
       id: "editor-padding",
       label: "Editor padding",
@@ -221,8 +227,7 @@ function SettingsPicker(props: OverlayGroupProps) {
       onChange: (value: string) => {
         const parsed = Number.parseInt(value, 10);
         if (Number.isFinite(parsed)) {
-          settings.set("editorPaddingX", parsed);
-          settings.save();
+          saveSetting(settings, "editorPaddingX", parsed);
         }
         bump();
       }

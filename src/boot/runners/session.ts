@@ -9,7 +9,7 @@
  * is constructed until the first turn runs.
  */
 import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 import { homedir } from "node:os";
 import { createMCPAgentToolFactory, loadMCPConfig, MCPClientPool } from "indusagi/mcp";
 import {
@@ -58,8 +58,12 @@ import { createAuthVault } from "../auth-vault.js";
 import { TOKEN_FILE, hasValidServerToken, getServerToken } from "../server-token.js";
 import { resolveServerMode, resolveServerGatewayUrls, serverTierProviders } from "./server-mode.js";
 import { DiskMemoryStore, memoryDirFor, loadMemoryDoc } from "./memdir.js";
+import { isReasoningEffortSupported } from "../../models.js";
+import type { CodingAgentThinkingLevel } from "../../conductor/contract.js";
 import { buildAddonHost, wrapToolsWithAddons, concatAddonTools } from "./addon-wiring.js";
+import { wrapToolsForTerminalBench } from "./benchmark-integrity.js";
 import type { BootContext, Invocation } from "../contract.js";
+import { readPrivateFileSync } from "../../security/private-state.js";
 
 interface AuthFileData {
   [provider: string]: unknown;
@@ -68,8 +72,9 @@ interface AuthFileData {
 function authenticatedProviders(ctx: BootContext): string[] {
   try {
     const path = ctx.workspace.authPath;
-    if (!existsSync(path)) return [];
-    const data = JSON.parse(readFileSync(path, "utf8")) as AuthFileData;
+    const raw = readPrivateFileSync(path);
+    if (raw === null) return [];
+    const data = JSON.parse(raw) as AuthFileData;
     return Object.keys(data).filter((id) => {
       const accounts = data[id];
       return id.length > 0 && accounts !== null && typeof accounts === "object" && Object.keys(accounts as object).length > 0;
@@ -219,10 +224,12 @@ function buildKeyResolver(
   };
 }
 
-const THINKING_LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhigh"]);
+const THINKING_LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
 
-function resolveThinkingLevel(raw: string | undefined): string | undefined {
-  return raw !== undefined && THINKING_LEVELS.has(raw) ? raw : undefined;
+export function resolveThinkingLevel(raw: string | undefined, modelId?: string): CodingAgentThinkingLevel | undefined {
+  return raw !== undefined && THINKING_LEVELS.has(raw) && isReasoningEffortSupported(modelId, raw)
+    ? raw as CodingAgentThinkingLevel
+    : undefined;
 }
 
 function resolveText(value: string): string {
@@ -299,8 +306,11 @@ export function composeSystem(
   skills: readonly SkillCard[] = [],
   memoryDoc?: ContextDoc,
 ): string {
+  const approvedExternalPaths = Array.isArray(inv.flags["allow-context-import"])
+    ? inv.flags["allow-context-import"].filter((path): path is string => typeof path === "string").map((path) => isAbsolute(path) ? path : resolve(cwd, path))
+    : [];
   const contextDocs = [
-    ...gatherContextDocs(cwd, homedir()),
+    ...gatherContextDocs(cwd, homedir(), { approvedExternalPaths }),
     ...memoryDoc ? [memoryDoc] : [],
   ];
   let base = inv.system !== undefined ? resolveText(inv.system) : composeBriefing({ tools, contextDocs, skills });
@@ -427,13 +437,14 @@ function lastUserTurnStart(messages: Array<{ role: string }>): number {
 
 const condenseTranscript = async (
   messages: Array<{ role: string }>,
-  opts?: { model?: unknown; apiKey?: string; signal?: AbortSignal; force?: boolean },
+  opts?: { model?: unknown; apiKey?: string; signal?: AbortSignal; force?: boolean; instructions?: string },
 ): Promise<Array<{ role: string }>> => {
   const model = opts?.model;
   const deps = model ? {
     model,
     ...opts?.apiKey !== undefined ? { apiKey: opts.apiKey } : {},
     ...opts?.signal !== undefined ? { signal: opts.signal } : {},
+    ...opts?.instructions !== undefined ? { instructions: opts.instructions } : {},
   } : {};
   const cleared = clearStaleToolResults(messages as never) as Array<{ role: string }>;
   if (opts?.force) {
@@ -471,12 +482,12 @@ function gatherPermissionRules(store: PreferenceStore): PermissionRule[] {
   return rules;
 }
 
-function resolveDefaultMode(store: PreferenceStore): PermissionMode {
+export function resolveDefaultMode(store: PreferenceStore): PermissionMode {
   for (const tier of [store.projectOverrides(), store.globalDefaults()]) {
     const mode = tier.permissions?.defaultMode;
     if (mode !== undefined && isPermissionMode(mode)) return mode;
   }
-  return "default";
+  return "acceptEdits";
 }
 
 function readOnlyNamesFromDeck(tools: AgentTool[]): Set<string> {
@@ -594,10 +605,13 @@ export async function buildSessionConductor(ctx: BootContext) {
       basePath: typeof inv.sarvamBasePath === "string" ? inv.sarvamBasePath : typeof inv.flags?.["sarvam-base-path"] === "string" ? inv.flags["sarvam-base-path"] : undefined,
     })),
   ];
-  const tools = wrapToolsWithAddons(concatAddonTools(deck, addons), addons);
+  const tools = wrapToolsForTerminalBench(
+    wrapToolsWithAddons(concatAddonTools(deck, addons), addons),
+    cwd,
+  );
   const skills = gatherModelSkills(cwd);
   const system = composeSystem(tools, inv, cwd, skills, memoryDoc);
-  const thinking = resolveThinkingLevel(inv.thinking);
+  const thinking = resolveThinkingLevel(inv.thinking, modelId);
   const fallbackModelId = inv.fallbackModelId;
   const planReachable = inv.mode === "repl";
   const canUseTool = buildPermissionGate(permissionRules, permissionMode, tools, planReachable);

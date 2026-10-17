@@ -2,11 +2,11 @@
  * Workspace Locator — turns the active {@link Brand} plus the environment into a
  * single, fully-resolved {@link Workspace} record of absolute paths.
  */
-import { mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 import type { Brand, Workspace } from "../boot/contract.js";
 import { BRAND } from "./brand.js";
+import { ensurePrivateDirectorySync } from "../security/private-state.js";
 
 export interface WorkspaceOverrides {
   /** User home directory; defaults to {@link homedir}. */
@@ -97,7 +97,7 @@ export function createWorkspace(overrides: WorkspaceOverrides = {}): Workspace {
  */
 export function ensureDirs(workspace: Workspace): Workspace {
   for (const key of DIRECTORY_KEYS) {
-    mkdirSync(workspace[key], { recursive: true });
+    ensurePrivateDirectorySync(workspace[key]);
   }
   return workspace;
 }

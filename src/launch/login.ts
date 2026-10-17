@@ -6,6 +6,8 @@
  * model turns through the server gateway.
  */
 import { createInterface } from "node:readline/promises";
+import { setTimeout as delay } from "node:timers/promises";
+import type { ServerTokenInput } from "../boot/server-token.js";
 import chalk from "chalk";
 import type { OAuthLoginCallbacks } from "indusagi/ai";
 import type { BootContext } from "../boot/contract.js";
@@ -37,11 +39,15 @@ function err(line: string): void {
   process.stderr.write(`${line}\n`);
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return delay(ms, undefined, {signal});
 }
 
 interface DeviceCodeResponse {
+  access_token?: string;
+  refresh_token?: string;
+  token_type?: string;
+  scope?: string;
   device_code?: string;
   user_code?: string;
   verification_uri?: string;
@@ -56,6 +62,7 @@ interface DeviceCodeResponse {
 async function postJson(
   url: string,
   body: Record<string, unknown>,
+  signal?: AbortSignal,
 ): Promise<{ status: number; data: DeviceCodeResponse }> {
   const res = await fetch(url, {
     method: "POST",
@@ -65,6 +72,7 @@ async function postJson(
       "user-agent": USER_AGENT,
     },
     body: JSON.stringify(body),
+    signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(30000)]) : AbortSignal.timeout(30000),
   });
   const data = (await res.json().catch(() => ({}))) as DeviceCodeResponse;
   return { status: res.status, data };
@@ -112,11 +120,12 @@ async function confirm(prompt: string, defaultValue: boolean): Promise<boolean> 
 async function requestDeviceCode(
   serverUrl: string,
   clientId: string,
+  signal?: AbortSignal,
 ): Promise<DeviceCodeResponse> {
   const { status, data } = await postJson(`${serverUrl}/api/auth/device/code`, {
     client_id: clientId,
     scope: DEVICE_SCOPE,
-  });
+  }, signal);
   if (status >= 400 || typeof data.device_code !== "string") {
     throw new LoginError(
       `Authorization request failed: ${data.error_description ?? data.error ?? data.message ?? `HTTP ${status}`}`,
@@ -129,18 +138,19 @@ async function pollForToken(
   serverUrl: string,
   clientId: string,
   device: DeviceCodeResponse,
-): Promise<DeviceCodeResponse> {
+  signal?: AbortSignal,
+): Promise<ServerTokenInput> {
   let intervalMs = Math.max(1, device.interval ?? 5) * 1000;
   const deadline = Date.now() + (device.expires_in ?? 0) * 1000;
   while (Date.now() < deadline) {
-    await sleep(intervalMs);
+    await sleep(intervalMs, signal);
     const { data } = await postJson(`${serverUrl}/api/auth/device/token`, {
       grant_type: DEVICE_GRANT_TYPE,
       device_code: device.device_code,
       client_id: clientId,
-    });
+    }, signal);
     if (typeof data.access_token === "string") {
-      return data;
+      return {...data, access_token:data.access_token};
     }
     const code = data.error;
     switch (code) {
@@ -172,14 +182,17 @@ export async function runServerTierLogin(
   serverUrl: string = INDUS_SERVER_URL,
   clientId: string = INDUS_CLIENT_ID,
 ): Promise<void> {
-  const device = await requestDeviceCode(serverUrl, clientId);
+  callbacks.signal?.throwIfAborted();
+  const device = await requestDeviceCode(serverUrl, clientId, callbacks.signal);
+  callbacks.signal?.throwIfAborted();
   callbacks.onAuth({
     url: device.verification_uri_complete ?? device.verification_uri ?? "",
     instructions: `Enter code ${device.user_code} to authorize this device.`,
   });
   callbacks.onProgress?.("Waiting for authorization...");
-  const token = await pollForToken(serverUrl, clientId, device);
-  await storeServerToken(token);
+  const token = await pollForToken(serverUrl, clientId, device, callbacks.signal);
+  callbacks.signal?.throwIfAborted();
+  if (!await storeServerToken(token)) throw new LoginError("Could not save the server token.");
   callbacks.onProgress?.("Server sign-in complete.");
 }
 

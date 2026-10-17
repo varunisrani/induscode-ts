@@ -58,7 +58,7 @@ const SERVER_TIER_ACCOUNT_ID = "server-session";
 const SERVER_TIER_PROVIDER_ID = "indus-server";
 
 function SignOutDialog(props: OverlayGroupProps) {
-  const { services, closeModal } = props;
+  const { services, closeModal, dispatch } = props;
   const [accounts, setAccounts] = useState<any[]>([]);
   useEffect(() => {
     let live = true;
@@ -112,8 +112,10 @@ function SignOutDialog(props: OverlayGroupProps) {
         } else {
           await services!.vault.remove(account.provider, account.accountId);
         }
-      } catch {
-        // ignore
+        await services!.refreshGatewayRouting();
+        dispatch({type:"status:set",status:{kind:"info",text:"Signed out. Model routing refreshed."}});
+      } catch (error) {
+        dispatch({type:"status:set",status:{kind:"error",text:error instanceof Error ? error.message : "Sign-out failed."}});
       }
       closeModal();
     }
@@ -126,7 +128,7 @@ function seedOAuthState(providerId: string, providerName: string, mode: string) 
     providerId,
     providerName,
     mode,
-    inputLabel: mode === "apiKey" ? `${providerName} API key` : "Authorization code",
+    inputLabel: mode === "apiKey" ? `${providerName} API key` : "Authorization code or redirect URL",
     inputValue: "",
     accountId: "default",
     accountName: "Default"
@@ -155,15 +157,22 @@ function OAuthFlowDialog(props: OverlayGroupProps & { providerId: string; mode: 
   })();
   const [state, setState] = useState(() => seedOAuthState(providerId, providerName, mode));
   const pending = useRef<((value: string) => void) | null>(null);
+  const cancelPrompt = useRef<(() => void) | null>(null);
+  const mounted = useRef(true);
+  const saving = useRef(false);
+  useEffect(() => () => { mounted.current = false; }, []);
   const merge = (next: any) => setState((prev) => ({ ...prev, ...next }));
   useEffect(() => {
     if (mode !== "oauth") return;
     let live = true;
+    const controller = new AbortController();
     const safeMerge = (next: any) => {
       if (live) merge(next);
     };
     const callbacks = {
+      signal: controller.signal,
       onAuth: (info: any) => {
+        if (!live) return;
         safeMerge({ authInfo: info, progress: "Opening your browser to sign in…" });
         void services!.openLoginUrl(info.url).then((opened: boolean) => {
           safeMerge({
@@ -174,16 +183,20 @@ function OAuthFlowDialog(props: OverlayGroupProps & { providerId: string; mode: 
         });
       },
       onPrompt: (prompt: any) =>
-        new Promise<string>((resolve) => {
-          pending.current = resolve;
+        new Promise<string>((resolve, reject) => {
+          if (!live) { reject(new DOMException("Sign-in cancelled", "AbortError")); return; }
+          cancelPrompt.current = () => reject(new DOMException("Sign-in cancelled", "AbortError"));
+          pending.current = value => { cancelPrompt.current = null; resolve(value); };
           safeMerge({ prompt, inputLabel: prompt.message, inputValue: "" });
         }),
       onManualCodeInput: () =>
-        new Promise<string>((resolve) => {
-          pending.current = resolve;
+        new Promise<string>((resolve, reject) => {
+          if (!live) { reject(new DOMException("Sign-in cancelled", "AbortError")); return; }
+          cancelPrompt.current = () => reject(new DOMException("Sign-in cancelled", "AbortError"));
+          pending.current = value => { cancelPrompt.current = null; resolve(value); };
           safeMerge({
-            prompt: { message: "Paste the authorization code:" },
-            inputLabel: "Authorization code",
+            prompt: { message: "Paste the authorization code or complete redirect URL:" },
+            inputLabel: "Authorization code or redirect URL",
             inputValue: ""
           });
         }),
@@ -194,7 +207,9 @@ function OAuthFlowDialog(props: OverlayGroupProps & { providerId: string; mode: 
     void (async () => {
       try {
         await services!.startOAuthLogin(providerId, callbacks, services!.vault);
+        if (!live) return;
         await services!.refreshGatewayRouting();
+        if (!live) return;
         selectProviderModel(services!, providerId);
         if (live) {
           dispatch({
@@ -209,15 +224,20 @@ function OAuthFlowDialog(props: OverlayGroupProps & { providerId: string; mode: 
     })();
     return () => {
       live = false;
+      controller.abort(); cancelPrompt.current?.(); cancelPrompt.current = null; pending.current = null;
     };
   }, []);
   const saveApiKey = () => {
     const key = (state as any).inputValue.trim();
-    if (key.length === 0) return;
+    if (key.length === 0 || saving.current) return;
+    saving.current = true;
     const account = (state as any).accountId ?? "default";
     void (async () => {
       try {
         await services!.vault.putApiKey(providerId, account, key, true);
+        if (!mounted.current) return;
+        await services!.refreshGatewayRouting();
+        if (!mounted.current) return;
         selectProviderModel(services!, providerId);
         dispatch({
           type: "status:set",

@@ -7,6 +7,7 @@
  * ready to use) both need the exact same answer, so it lives here once.
  */
 import { useEffect, useState } from "indusagi/react-host";
+import { getEnvApiKey } from "indusagi/ai";
 import { hasValidServerToken } from "../boot/server-token.js";
 import { serverTierProviders } from "../boot/runners/server-mode.js";
 import type { OverlayServices } from "./contract.js";
@@ -27,10 +28,14 @@ export function useAuthenticatedProviders(services: OverlayServices | undefined,
     void (async () => {
       const found = new Set<string>();
       try {
-        for (const provider of services.listLoginProviders()) {
+        const providers = new Set([
+          ...services.listLoginProviders().map(provider => provider.id),
+          ...services.conductor.availableModels().map(model => model.provider)
+        ]);
+        for (const provider of providers) {
           try {
-            if ((await services.vault.listAccounts(provider.id)).length > 0) {
-              found.add(provider.id);
+            if (getEnvApiKey(provider) || (await services.vault.listAccounts(provider)).length > 0) {
+              found.add(provider);
             }
           } catch {
             // ignore
@@ -51,6 +56,6 @@ export function useAuthenticatedProviders(services: OverlayServices | undefined,
     return () => {
       live = false;
     };
-  }, [refreshKey]);
+  }, [services, refreshKey]);
   return authed;
 }

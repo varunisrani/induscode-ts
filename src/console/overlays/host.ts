@@ -16,8 +16,18 @@ export interface OverlayHostProps {
   readonly closeModal: () => void;
 }
 
+import { Box, Text, useInput } from "indusagi/react-host/ink";
+
+function UnavailableOverlay({ closeModal }: { closeModal: () => void }) {
+  useInput((_input, key) => { if (key.escape || key.return) closeModal(); });
+  return jsx(Box, {children: jsx(Text, {children: "This dialog is unavailable in this host. Esc / Enter to return."})});
+}
+
 export function OverlayHost(props: OverlayHostProps) {
   if (props.modal.kind === "none") return null;
+  if (!props.services && props.modal.kind !== "approval" && props.modal.kind !== "plugin") {
+    return jsx(UnavailableOverlay, {closeModal: props.closeModal});
+  }
   const forwarded = {
     modal: props.modal,
     services: props.services,

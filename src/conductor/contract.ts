@@ -40,6 +40,7 @@ import type { AgentMessage, AgentTool, CanUseToolFn, ThinkingLevel } from "indus
 import type { KnownProvider, Model, Usage } from "indusagi/ai";
 import type { PermissionMode } from "../settings.js";
 import type { ApprovalResolver } from "./permissions.js";
+export type CodingAgentThinkingLevel = ThinkingLevel | "max";
 /** Re-exported framework vocabulary that conductor consumers routinely need. */
 export type { AgentMessage, AgentTool, CanUseToolFn, ThinkingLevel, Model, Usage, KnownProvider };
 /** Re-exported permission vocabulary, so conductor consumers get it in one import. */
@@ -118,7 +119,7 @@ export function conductorFault(kind: FaultKind, message: string, cause?: unknown
  *   - `queue`     — the pending-input queue changed; `count` is its new depth.
  *   - `idle`      — the conductor has no in-flight work and is ready for input.
  */
-export type SessionSignal = {
+export type SessionSignal = { readonly kind: "reset" } | { readonly kind: "phase"; readonly phase: ConductorPhase } | {
     readonly kind: "prompt";
     readonly text: string;
 } | {
@@ -131,6 +132,7 @@ export type SessionSignal = {
     readonly kind: "tool_start";
     readonly id: string;
     readonly name: string;
+    readonly args: unknown;
 } | {
     readonly kind: "tool_update";
     readonly id: string;
@@ -140,6 +142,8 @@ export type SessionSignal = {
     readonly kind: "tool_end";
     readonly id: string;
     readonly ok: boolean;
+    readonly result: unknown;
+    readonly isError: boolean;
 } | {
     readonly kind: "turn_end";
     readonly usage: Usage;
@@ -366,6 +370,7 @@ export interface SessionStats {
 }
 /** Options for {@link SessionConductor.executeBash}. */
 export interface ExecuteBashOptions {
+    readonly signal?: AbortSignal;
     /**
      * When `true`, the command's output is *not* recorded as a transcript note,
      * so it never re-enters the agent's context. Defaults to `false`.
@@ -431,7 +436,7 @@ export interface SessionConductorOptions {
     /** Tools made available to the agent for this session. */
     readonly tools?: AgentTool[];
     /** Initial reasoning effort for models that support it. */
-    readonly thinking?: ThinkingLevel;
+    readonly thinking?: CodingAgentThinkingLevel;
     /**
      * Canonical id of a model to fall back to when the bound model is overloaded
      * (HTTP 529 / "overloaded") mid-turn (`--fallback-model`). When set, an
@@ -650,7 +655,7 @@ export interface SessionConductor {
      * While the condense runs, {@link submit} queues instead of racing it, and the
      * queue drains once the condense settles.
      */
-    condense(): Promise<CondenseOutcome>;
+    condense(instructions?: string): Promise<CondenseOutcome>;
     /**
      * Cancel an in-flight manual {@link condense} (the `/compact` Esc affordance).
      * The summarizer's result is discarded and the transcript stays untouched; a
@@ -715,19 +720,19 @@ export interface SessionConductor {
      */
     costReport(): string;
     /** The reasoning effort currently applied to the session. */
-    thinkingLevel(): ThinkingLevel;
+    thinkingLevel(): CodingAgentThinkingLevel;
     /**
      * Set the reasoning effort for subsequent turns. Applied to the agent when it
      * exposes a setter; otherwise stored and applied on the next model bind.
      *
      * @param level the reasoning effort to apply
      */
-    setThinkingLevel(level: ThinkingLevel): void;
+    setThinkingLevel(level: CodingAgentThinkingLevel): void;
     /**
      * Advance the reasoning effort to the next level in the cycle, applying it, and
      * return the newly-selected level.
      */
-    cycleThinkingLevel(): ThinkingLevel;
+    cycleThinkingLevel(): CodingAgentThinkingLevel;
     /**
      * The permission mode currently in effect. The live `canUseTool` gate reads
      * this on every tool call, so the value reflects the most recent
@@ -838,5 +843,5 @@ export interface SessionConductor {
      *
      * @param id canonical id of the model to switch to
      */
-    cycleModel?(id: string): void;
+    cycleModel?(id: string, direction?: -1 | 1): void;
 }

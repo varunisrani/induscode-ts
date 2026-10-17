@@ -43,10 +43,6 @@ const OAUTH_CLIENT_ID_WIRING: Record<string, { envVar: string; sentinel: string 
     envVar: "INDUSAGI_ANTHROPIC_OAUTH_CLIENT_ID",
     sentinel: "<UNREGISTERED-ANTHROPIC-OAUTH-APP>",
   },
-  "openai-codex": {
-    envVar: "INDUSAGI_OPENAI_CODEX_CLIENT_ID",
-    sentinel: "<UNREGISTERED-OPENAI-CODEX-APP>",
-  },
   "github-copilot": {
     envVar: "INDUSAGI_GITHUB_COPILOT_CLIENT_ID",
     sentinel: "<UNREGISTERED-COPILOT-APP>",
@@ -120,12 +116,12 @@ interface LaunchAttempt {
   args: string[];
 }
 
-function launchAttempts(url: string): LaunchAttempt[] {
-  switch (process.platform) {
+export function launchAttempts(url: string, platform: NodeJS.Platform = process.platform): LaunchAttempt[] {
+  switch (platform) {
     case "darwin":
       return [{ command: "open", args: [url] }];
     case "win32":
-      return [{ command: "cmd", args: ["/c", "start", "", url] }];
+      return [{ command: "rundll32.exe", args: ["url.dll,FileProtocolHandler", url] }];
     default:
       return [
         { command: "xdg-open", args: [url] },
@@ -199,8 +195,11 @@ export async function startOAuthLogin(
       envVar !== undefined ? `set ${envVar} and restart` : "configure its OAuth client id";
     throw new Error(`Browser sign-in for "${providerId}" is not configured: ${hint}.`);
   }
+  callbacks.signal?.throwIfAborted();
   const credentials = await provider.login(callbacks);
+  callbacks.signal?.throwIfAborted();
   const existing = await vault.listAccounts(providerId);
+  callbacks.signal?.throwIfAborted();
   const madeDefault = existing.length === 0;
   await vault.putOAuth(providerId, account, credentials, madeDefault);
   return { provider: providerId, account, madeDefault };

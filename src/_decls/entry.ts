@@ -1,6 +1,5 @@
 // @ts-nocheck
 // Type declarations recovered from dist/types (no runtime body)
-#!/usr/bin/env node
 /**
  * Process entry point — the bin the OS launches.
  *

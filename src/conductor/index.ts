@@ -16,7 +16,7 @@
  * land; consumers import the conductor surface from `src/conductor` rather than
  * reaching into individual modules.
  */
-export type { FaultKind, ConductorFault, SessionSignal, SignalKind, SignalOf, SignalHandler, TranscriptSchema, TranscriptRole, TranscriptEntry, SessionHead, ModelCardRef, MatchQuery, ConductorPhase, ConductorState, QueueMode, QueuedInput, SessionStats, ExecuteBashOptions, BashOutcome, SessionConductor, SessionConductorOptions, CondenseOutcome, AgentMessage, AgentTool, CanUseToolFn, ThinkingLevel, Model, Usage, KnownProvider, PermissionMode, } from "./contract.js";
+export type { FaultKind, ConductorFault, SessionSignal, SignalKind, SignalOf, SignalHandler, TranscriptSchema, TranscriptRole, TranscriptEntry, SessionHead, ModelCardRef, MatchQuery, ConductorPhase, ConductorState, QueueMode, QueuedInput, SessionStats, ExecuteBashOptions, BashOutcome, SessionConductor, SessionConductorOptions, CondenseOutcome, AgentMessage, AgentTool, CanUseToolFn, ThinkingLevel, CodingAgentThinkingLevel, Model, Usage, KnownProvider, PermissionMode, } from "./contract.js";
 export { conductorFault, TRANSCRIPT_SCHEMA } from "./contract.js";
 export { createSessionConductor, reduceState, noopCondense, withGatewayBaseUrl, type AgentLike, type ConductorDeps, type CondenseFn, type RetryPolicy, } from "./conductor.js";
 export { SignalHub, translateAgentEvent, type SignalHubOptions } from "./signal-hub/index.js";

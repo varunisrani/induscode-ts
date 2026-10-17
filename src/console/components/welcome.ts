@@ -36,12 +36,12 @@ export function mascotRows(face: MascotFace): readonly (readonly MascotSegment[]
 }
 
 export const TIPS: readonly string[] = [
-  "Run /init to create a CLAUDE.md file with instructions for IndusCode",
+  "Run /help to explore commands and configured skill helpers",
   'Ask in plain English — try "fix the failing tests" or "explain src/agent.ts"',
-  "Shift+Tab cycles permission modes: auto → plan → accept-edits",
+  "Shift+Tab cycles: default → accept-edits → plan → bypass",
   "Type @ to attach a file, or paste an image straight into the prompt",
   "Run /status to check your model, account, and connectivity",
-  "Use /skills to discover specialized helpers for the task at hand"
+  "Use /help to discover specialized commands for the task at hand"
 ];
 
 export const WHATS_NEW: readonly string[] = [

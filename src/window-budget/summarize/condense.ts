@@ -11,6 +11,8 @@ import { completeSimple } from "indusagi/ai";
 import { CONDENSER_BRIEF, buildSummaryPrompt, flattenTranscript } from "./prompt.js";
 
 export interface SummarizeDeps {
+  /** Literal user guidance; never interpreted as shell input. */
+  readonly instructions?: string;
   /** Injectable completer (default: framework `completeSimple`). */
   readonly complete?: CompleteFn;
   /** The summarization model. When omitted, a deterministic local digest is used. */
@@ -71,7 +73,8 @@ export async function summarize(
     const digest = localFallbackDigest(messages, deps.priorDigest);
     return { message: toSummaryMessage(digest, scope), coveredCount };
   }
-  const prompt = buildSummaryPrompt(messages, scope, deps.priorDigest);
+  const prompt = buildSummaryPrompt(messages, scope, deps.priorDigest) +
+    (deps.instructions ? `\n\nUser compaction guidance:\n${deps.instructions}` : "");
   const context = {
     systemPrompt: CONDENSER_BRIEF,
     messages: [{ role: "user", content: prompt, timestamp: Date.now() }],

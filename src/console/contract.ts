@@ -46,10 +46,10 @@
  */
 import type { InkThemeAdapter, SessionSnapshot, StatusMessage, ToolExecutionState, UiDisplayBlock } from "indusagi/react-ink";
 import type { Dispatch, ReactNode, Reducer } from "react";
-import type { ConductorState, SessionConductor, SessionSignal } from "../conductor.js";
-import type { PreferenceStore } from "../settings.js";
-import type { SessionLibrary } from "../sessions.js";
-import type { AuthVault, LoginProvider, OAuthLoginResult } from "../launch.js";
+import type { ConductorState, SessionConductor, SessionSignal } from "../conductor/index.js";
+import type { PreferenceStore } from "../settings/index.js";
+import type { SessionLibrary } from "../sessions/index.js";
+import type { AuthVault, LoginProvider, OAuthLoginResult } from "../launch/index.js";
 import type { OAuthLoginCallbacks } from "indusagi/ai";
 /** Re-exported framework vocabulary that console consumers routinely need. */
 export type { SessionSnapshot, ToolExecutionState, StatusMessage, UiDisplayBlock, InkThemeAdapter, };
@@ -358,7 +358,11 @@ export interface ConsoleState {
  *     - `busy:set`          — set the in-flight flag.
  *     - `tick`              — bump the status-bar re-render tick.
  */
-export type ConsoleEvent = {
+export type ConsoleEvent = { readonly type: "view:reset" } | {
+    readonly type: "display:set";
+    readonly key: "showReasoning" | "showImages";
+    readonly value: boolean;
+} | {
     readonly type: "buffer:set";
     readonly text: string;
 } | {
@@ -485,6 +489,7 @@ export type SlashOutcome = {
  * with respect to React internals and lets tests pass a scripted fake.
  */
 export interface SlashContext {
+    readonly services?: OverlayServices;
     /** The raw argument string after the command name (may be empty). */
     readonly args: string;
     /** The session this console drives. */

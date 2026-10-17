@@ -4,6 +4,7 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { gatherSkillCards, loadMacros } from "../../briefing/index.js";
+import type { SkillCard, Macro } from "../../briefing/index.js";
 import type { SlashCommand } from "../contract.js";
 import { FAMILY } from "./commands/shared.js";
 import { buildDynamicCommands } from "./commands/dynamic.js";
@@ -30,16 +31,16 @@ function dynamicRoots() {
 
 function discoverDynamicSources() {
   const roots = dynamicRoots();
-  let skills: Array<{ name: string; location: string }> = [];
+  let skills: SkillCard[] = [];
   try {
     skills = gatherSkillCards(roots.skills).cards.slice();
   } catch {
     skills = [];
   }
-  const templates: Array<{ name: string; source: string }> = [];
+  const templates: Macro[] = [];
   const claimed = new Set<string>();
   for (const root of roots.macros) {
-    let loaded: Array<{ name: string; source: string }> = [];
+    let loaded: Macro[] = [];
     try {
       loaded = loadMacros(root.dir, { origin: root.origin, label: root.label });
     } catch {

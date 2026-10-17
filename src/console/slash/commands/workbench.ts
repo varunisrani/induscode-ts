@@ -11,7 +11,7 @@ import { FAMILY, HANDLED, familyRunner, info, warn } from "./shared.js";
 function block(slug: string, title: string, markdown: string) {
   return {
     id: `${slug}-${Date.now().toString(36)}`,
-    kind: "changelog",
+    kind: "changelog" as const,
     title,
     markdown,
     timestamp: Date.now()
@@ -147,7 +147,7 @@ const HOTKEYS: Array<[string, string]> = [
   ["Tab", "Accept the highlighted completion"],
   ["Ctrl+C", "Interrupt the running turn"],
   ["Ctrl+T", "Toggle reasoning / thinking rows"],
-  ["/thinking", "Cycle thinking effort level (off → low → medium)"],
+  ["/thinking", "Cycle the selected model's supported reasoning efforts"],
   ["Ctrl+V", "Attach an image from the clipboard"],
   ["Ctrl+G", "Edit the composer in your external editor"],
   ["Ctrl+O", "Expand or collapse full tool output"],
@@ -222,7 +222,7 @@ export const workbenchCommands: SlashCommand[] = [
   {
     name: "whats-new",
     summary: "Show what changed in this build",
-    aliases: ["changelog"],
+    aliases: ["changelog", "release-notes"],
     run: runChangelog
   },
   {
@@ -232,7 +232,7 @@ export const workbenchCommands: SlashCommand[] = [
   },
   {
     name: "thinking",
-    summary: "Cycle thinking effort level (off → low → medium → off)",
+    summary: "Cycle reasoning effort using the selected model's supported levels",
     run: (ctx) => {
       ctx.conductor.cycleThinkingLevel();
       return HANDLED;

@@ -5,6 +5,7 @@ import { execFileSync } from "node:child_process";
 import { homedir } from "node:os";
 import React, { useEffect, useMemo, useState } from "indusagi/react-host";
 import { Box, Text, useInput } from "indusagi/react-host/ink";
+import { useStdin, useStdout } from "ink";
 import { MessageList, StreamingMarkdown, TaskPanel, type InkThemeAdapter } from "indusagi/react-ink";
 import { Fragment, jsx, jsxs } from "indusagi/react-host/jsx-runtime";
 import { VERSION } from "../../index.js";
@@ -41,7 +42,10 @@ import {
   EMPTY_APPROVAL_QUEUE,
   modeReleasesApprovals
 } from "../overlays/approval-queue.js";
+import type { ApprovalChoice } from "../../conductor/index.js";
 import type { ConsoleProps } from "../contract.js";
+import { isThemeScheme } from "../contract.js";
+import { resolveTheme } from "../theme/resolve.js";
 import { OverlayHost } from "../overlays/host.js";
 import { useAuthenticatedProviders } from "../auth-status.js";
 import { gatherStartup } from "../startup.js";
@@ -52,6 +56,7 @@ import { Banner } from "./Banner.js";
 import { Composer } from "./Composer.js";
 import { StatusBar } from "./StatusBar.js";
 import { WorkingIndicator } from "./WorkingIndicator.js";
+import { ScrollViewport, useTerminalSize } from "./ScrollViewport.js";
 
 const { useReducer, useRef, useCallback } = React;
 
@@ -220,8 +225,27 @@ function permissionModeStatusText(mode: string): string {
 
 export function TerminalConsole(props: ConsoleProps) {
   const { conductor, theme, slash, verbose, onExit, initialInput, services } = props;
-  const adapter = theme.adapter;
-  const [state, dispatch] = useReducer(consoleReducer, initConsoleState({ scheme: theme.scheme }));
+  const {stdin, internal_eventEmitter} = useStdin();
+  const {stdout} = useStdout();
+  // Ink 5 labels both DEL (the usual Backspace byte) and CSI 3~ as delete.
+  // Preserve the raw chunk before Ink's parser discards that distinction.
+  const rawKey = useRef("");
+  useEffect(() => {
+    const capture = (data: string | Buffer) => { rawKey.current = String(data); };
+    internal_eventEmitter.prependListener("input", capture);
+    return () => { internal_eventEmitter.removeListener("input", capture); };
+  }, [internal_eventEmitter]);
+  const [state, dispatch] = useReducer(consoleReducer, theme.scheme, (scheme) => {
+    let stored: unknown;
+    try { stored = services?.settings.get("colourScheme"); } catch { /* use host theme */ }
+    const flag = (key: "showReasoning" | "showImages", fallback: boolean) => {
+      try { const value = services?.settings.get(key); return typeof value === "boolean" ? value : fallback; }
+      catch { return fallback; }
+    };
+    return initConsoleState({ scheme: typeof stored === "string" && isThemeScheme(stored) ? stored : scheme,
+      showReasoning: flag("showReasoning", false), showImages: flag("showImages", true) });
+  });
+  const adapter = resolveTheme(state.scheme).adapter;
   const chord = useRef(NO_CHORD);
   const chordTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const paste = useRef(EMPTY_PASTE_VAULT);
@@ -232,13 +256,20 @@ export function TerminalConsole(props: ConsoleProps) {
   const liveReason = useRef<string | null>(null);
   const rowSeed = useRef(0);
   const ctrlCAt = useRef(0);
+  const resumeHandler = useRef<(() => void) | null>(null);
+  useEffect(() => () => { if (resumeHandler.current) process.off("SIGCONT", resumeHandler.current); }, []);
   const [highlight, setHighlight] = useState(0);
   const [toolExecutions, setToolExecutions] = useState<Record<string, any>>({});
   const [taskTokens, setTaskTokens] = useState<Record<string, number>>({});
   const [subagentActivity, setSubagentActivity] = useState<Record<string, any[]>>({});
   const [expandTools, setExpandTools] = useState(false);
   const [agentsOpen, setAgentsOpen] = useState(false);
-  const [terminalRows, setTerminalRows] = useState(() => process.stdout.rows ?? FALLBACK_TERMINAL_ROWS);
+  const { rows: terminalRows, columns: terminalColumns } = useTerminalSize();
+  // Ink clears the entire terminal whenever rendered output is as tall as the
+  // terminal (`outputHeight >= stdout.rows`). Leave one physical row unused so
+  // ordinary input edits use Ink's incremental line updates instead of a
+  // full-screen clear, which visibly flickers over Windows Terminal/SSH.
+  const renderRows = Math.max(1, terminalRows - 1);
   const [, forceTick] = useState(0);
   const pulse = useCallback(() => forceTick((n) => n + 1), []);
   const dirReader = useMemo(() => createDirReader(process.cwd()), []);
@@ -260,7 +291,7 @@ export function TerminalConsole(props: ConsoleProps) {
   }, []);
   const requestApproval = useCallback(
     (toolName: string, input: unknown, opts: { signal?: AbortSignal }) =>
-      new Promise((resolve) => {
+      new Promise<ApprovalChoice>((resolve) => {
         approvalSeed.current += 1;
         const id = `ap_${approvalSeed.current}`;
         const request = {
@@ -268,17 +299,19 @@ export function TerminalConsole(props: ConsoleProps) {
           input,
           suggestions: allowAlwaysRuleStrings(toolName, input)
         };
-        approvalResolvers.current.set(id, resolve);
         const signal = opts.signal;
+        const onAbort = () => settleApproval(id, "deny");
+        const finish = (choice: ApprovalChoice) => { signal?.removeEventListener("abort", onAbort); resolve(choice); };
+        approvalResolvers.current.set(id, finish);
         if (signal !== void 0) {
           if (signal.aborted) {
             approvalResolvers.current.delete(id);
             resolve("deny");
             return;
           }
-          signal.addEventListener("abort", () => settleApproval(id, "deny"), { once: true });
+          signal.addEventListener("abort", onAbort, { once: true });
         }
-        dispatchApproval({ type: "enqueue", entry: { id, request, resolve } });
+        dispatchApproval({ type: "enqueue", entry: { id, request, resolve: finish } });
       }),
     [settleApproval]
   );
@@ -324,10 +357,31 @@ export function TerminalConsole(props: ConsoleProps) {
   const reasonText = useRef("");
   const visibleFrom = useRef(0);
   const [compactNote, setCompactNote] = useState<string[] | null>(null);
+  const sessionId = conductor.snapshot().head.sessionId;
+  const priorSession = useRef(sessionId);
+  const resetView = useCallback(() => {
+    liveAnswer.current = null; liveReason.current = null;
+    answerText.current = ""; reasonText.current = ""; visibleFrom.current = 0;
+    activePaste.current = null; paste.current = EMPTY_PASTE_VAULT; burst.current = "";
+    if (burstTimer.current !== null) { clearTimeout(burstTimer.current); burstTimer.current = null; }
+    setToolExecutions({}); setTaskTokens({}); setSubagentActivity({}); setCompactNote(null); setAgentsOpen(false);
+    denyAllApprovals(); dispatch({type:"view:reset"});
+  }, [denyAllApprovals]);
+  useEffect(() => {
+    if (priorSession.current !== sessionId) { priorSession.current = sessionId; resetView(); }
+  }, [sessionId, resetView]);
   useEffect(() => {
     const off = conductor.subscribe((signal: any) => {
       switch (signal.kind) {
+        case "reset": { resetView(); break; }
+        case "phase": {
+          dispatch({type:"busy:set",busy:signal.phase === "streaming" || signal.phase === "tooling" || signal.phase === "condensing"});
+          break;
+        }
         case "prompt": {
+          liveAnswer.current = null; liveReason.current = null;
+          answerText.current = ""; reasonText.current = "";
+          dispatch({type:"busy:set",busy:true});
           break;
         }
         case "text": {
@@ -335,10 +389,8 @@ export function TerminalConsole(props: ConsoleProps) {
             const id = freshRowId(rowSeed.current++);
             liveAnswer.current = id;
             answerText.current = signal.delta;
-            dispatch({ type: "rows:append", row: { id, kind: "answer", text: answerText.current } });
           } else {
             answerText.current += signal.delta;
-            dispatch({ type: "rows:patch", id: liveAnswer.current, text: answerText.current });
           }
           break;
         }
@@ -347,19 +399,14 @@ export function TerminalConsole(props: ConsoleProps) {
             const id = freshRowId(rowSeed.current++);
             liveReason.current = id;
             reasonText.current = signal.delta;
-            dispatch({ type: "rows:append", row: { id, kind: "reason", text: reasonText.current } });
           } else {
             reasonText.current += signal.delta;
-            dispatch({ type: "rows:patch", id: liveReason.current, text: reasonText.current });
           }
           break;
         }
         case "tool_start": {
           liveAnswer.current = null;
           liveReason.current = null;
-          const id = `tool-${signal.id}`;
-          const row = { id, kind: "toolRun", text: signal.name, runId: signal.id };
-          dispatch({ type: "rows:append", row });
           setToolExecutions((current) => ({
             ...current,
             [signal.id]: {
@@ -404,11 +451,6 @@ export function TerminalConsole(props: ConsoleProps) {
           break;
         }
         case "tool_end": {
-          dispatch({
-            type: "rows:patch",
-            id: `tool-${signal.id}`,
-            text: signal.ok ? "done" : "failed"
-          });
           setToolExecutions((current) => {
             const prior = current[signal.id];
             if (prior === void 0) return current;
@@ -433,7 +475,7 @@ export function TerminalConsole(props: ConsoleProps) {
           if (signal.manual) {
             const carried: string[] = [];
             for (const message of conductor.messages()) {
-              const content = message.content;
+              const content = "content" in message ? message.content : undefined;
               if (typeof content === "string" && content.startsWith(RESTORED_FILE_PREFIX)) {
                 const firstLine = content.slice(RESTORED_FILE_PREFIX.length).split("\n", 1)[0];
                 if (firstLine) carried.push(firstLine.trim());
@@ -445,7 +487,7 @@ export function TerminalConsole(props: ConsoleProps) {
             liveReason.current = null;
             answerText.current = "";
             reasonText.current = "";
-            dispatch({ type: "rows:set", rows: [] });
+            dispatch({ type: "blocks:clear" });
           }
           dispatch({
             type: "status:set",
@@ -474,6 +516,7 @@ export function TerminalConsole(props: ConsoleProps) {
           break;
         }
         case "idle": {
+          liveAnswer.current = null; liveReason.current = null;
           dispatch({ type: "busy:set", busy: false });
           break;
         }
@@ -483,7 +526,7 @@ export function TerminalConsole(props: ConsoleProps) {
       pulse();
     });
     return off;
-  }, [conductor, pulse]);
+  }, [conductor, pulse, resetView]);
   const completion = useMemo(
     () => completeAt(state.buffer, state.caret, slash, dirReader),
     [state.buffer, state.caret, slash, dirReader]
@@ -494,8 +537,6 @@ export function TerminalConsole(props: ConsoleProps) {
   }, [suggestions.length, highlight]);
   const runTurn = useCallback(
     async (text: string) => {
-      const id = freshRowId(rowSeed.current++);
-      dispatch({ type: "rows:append", row: { id, kind: "prompt", text } });
       dispatch({ type: "busy:set", busy: true });
       if (conductor.snapshot().phase === "condensing") {
         dispatch({
@@ -505,8 +546,8 @@ export function TerminalConsole(props: ConsoleProps) {
       }
       setCompactNote(null);
       activePaste.current = null;
-      answerText.current = "";
-      reasonText.current = "";
+      // The conductor may only enqueue this input. Live buffers belong to the
+      // running turn and are reset by actual turn lifecycle signals.
       try {
         await conductor.submit(text);
       } catch (err) {
@@ -525,9 +566,10 @@ export function TerminalConsole(props: ConsoleProps) {
       const text = hasMarkers(raw, paste.current) ? expandMarkers(raw, paste.current) : raw;
       const trimmed = text.trim();
       dispatch({ type: "buffer:set", text: "" });
-      paste.current = EMPTY_PASTE_VAULT;
+      paste.current = { bodies: new Map(), minted: paste.current.minted };
+      activePaste.current = null;
       if (trimmed.length === 0) return;
-      dispatch({ type: "history:push", text: raw });
+      dispatch({ type: "history:push", text });
       if (trimmed.startsWith("!")) {
         const excludeFromContext = trimmed.startsWith("!!");
         const command = trimmed.slice(excludeFromContext ? 2 : 1).trim();
@@ -536,6 +578,13 @@ export function TerminalConsole(props: ConsoleProps) {
         void conductor
           .executeBash(command, { excludeFromContext })
           .then((outcome: any) => {
+            const output = String(outcome.output ?? "");
+            const fence = "`".repeat(Math.max(3, ...Array.from(output.matchAll(/`+/g), m => m[0].length + 1)));
+            const recorded = conductor.messages().some((message: any) => message.role === "user" && message.content === `$ ${command}\n${output}`.trimEnd());
+            if (!recorded || excludeFromContext) dispatch({ type: "block:append", block: {
+              id: freshRowId(rowSeed.current++), kind: "changelog", title: `$ ${command}`,
+              markdown: `${fence}text\n${output || "(no output)"}\n${fence}`, timestamp: Date.now()
+            } });
             dispatch({
               type: "status:set",
               status: {
@@ -554,9 +603,9 @@ export function TerminalConsole(props: ConsoleProps) {
       }
       const resolution = resolveSlash(trimmed, slash);
       if (resolution.kind === "match") {
-        const outcome = resolution.command.run({
+        void Promise.resolve().then(() => resolution.command.run({
           args: resolution.args,
-          conductor,
+          conductor, services,
           dispatch,
           openModal: (kind, payload) => dispatch({ type: "modal:open", kind, payload }),
           closeModal: () => dispatch({ type: "modal:close" }),
@@ -564,10 +613,9 @@ export function TerminalConsole(props: ConsoleProps) {
           setStatus: (status) => dispatch({ type: "status:set", status }),
           setBuffer: (value) => dispatch({ type: "buffer:set", text: value }),
           appendBlock: (block) => dispatch({ type: "block:append", block })
-        });
-        void Promise.resolve(outcome).then((settled: any) => {
+        })).then((settled: any) => {
           if (settled.kind === "prompt") void runTurn(settled.text);
-        });
+        }).catch((error) => dispatch({type:"status:set",status:{kind:"error",text:error instanceof Error ? error.message : String(error)}}));
         return;
       }
       if (resolution.kind === "miss") {
@@ -579,7 +627,7 @@ export function TerminalConsole(props: ConsoleProps) {
       }
       void runTurn(text);
     },
-    [slash, conductor, onExit, runTurn]
+    [slash, conductor, onExit, runTurn, services]
   );
   const flushBurst = useCallback(() => {
     if (burstTimer.current !== null) {
@@ -639,13 +687,6 @@ export function TerminalConsole(props: ConsoleProps) {
     },
     []
   );
-  useEffect(() => {
-    const onResize = () => setTerminalRows(process.stdout.rows ?? FALLBACK_TERMINAL_ROWS);
-    process.stdout.on("resize", onResize);
-    return () => {
-      process.stdout.off("resize", onResize);
-    };
-  }, []);
   const titleName = conductor.sessionName();
   useEffect(() => {
     writeTerminalTitle(titleName && titleName.length > 0 ? titleName : "indus console");
@@ -666,7 +707,8 @@ export function TerminalConsole(props: ConsoleProps) {
     (rawInput, key) => {
       const input = rawInput.replace(BRACKETED_PASTE, "");
       if (input.length === 0 && input !== rawInput) return;
-      const intent = readKey(input, key);
+      const isBackspaceByte = rawKey.current === "\x7f" || rawKey.current === "\b";
+      const intent = readKey(input, {...key, backspace:key.backspace || isBackspaceByte, delete:key.delete && !isBackspaceByte});
       if (intent.verb === "text:type") {
         burst.current += intent.text ?? "";
         armChord(NO_CHORD);
@@ -803,7 +845,8 @@ export function TerminalConsole(props: ConsoleProps) {
           return;
         }
         case "flow:cycleModel":
-          conductor.cycleModel?.("");
+          conductor.cycleModel?.("", intent.direction ?? 1);
+          pulse();
           return;
         case "model:cycleThinking": {
           const level = conductor.cycleThinkingLevel();
@@ -859,7 +902,7 @@ export function TerminalConsole(props: ConsoleProps) {
           return;
         }
         case "input:externalEditor": {
-          const edited = openInExternalEditor(state.buffer);
+          const edited = openInExternalEditor(expandMarkers(state.buffer, paste.current), {terminal:{stdin,stdout}});
           if (edited !== null) {
             dispatch({ type: "buffer:set", text: edited });
           }
@@ -873,9 +916,25 @@ export function TerminalConsole(props: ConsoleProps) {
         case "view:expandTools":
           setExpandTools((current) => !current);
           return;
-        case "flow:suspend":
-          process.kill(process.pid, "SIGTSTP");
+        case "flow:suspend": {
+          if (process.platform === "win32") {
+            dispatch({type:"status:set",status:{kind:"warning",text:"Process suspension is not supported on Windows."}});
+            return;
+          }
+          const wasRaw = stdin.isRaw === true;
+          const resume = () => {
+            process.off("SIGCONT", resume); resumeHandler.current = null;
+            stdin.setRawMode?.(wasRaw);
+            if (stdout.isTTY) stdout.write("\x1b[?25l");
+            dispatch({type:"status:set",status:{kind:"info",text:"Resumed console."}});
+          };
+          resumeHandler.current = resume;
+          process.once("SIGCONT", resume);
+          stdin.setRawMode?.(false);
+          if (stdout.isTTY) stdout.write("\x1b[?25h");
+          try { process.kill(process.pid, "SIGTSTP"); } catch { resume(); }
           return;
+        }
         case "none":
         default:
           return;
@@ -883,6 +942,14 @@ export function TerminalConsole(props: ConsoleProps) {
     },
     { isActive: state.modal.kind === "none" && !agentsOpen }
   );
+  // Global interrupt ownership also applies while a dialog or drill-in has focus.
+  useInput((input, key) => {
+    if (!key.ctrl || input !== "c") return;
+    if (state.busy || conductor.isBusy?.() || conductor.snapshot().phase === "condensing") {
+      denyAllApprovals(); conductor.abort();
+    }
+    dispatch({type:"modal:close"}); setAgentsOpen(false);
+  }, {isActive: state.modal.kind !== "none" || agentsOpen});
   useInput(
     (_rawInput, key) => {
       if (key.tab && key.shift) cyclePermission();
@@ -926,7 +993,7 @@ export function TerminalConsole(props: ConsoleProps) {
   const taskPanelRows = showTaskPanel ? 2 + Math.min(pendingMessages.length, 8) : 0;
   const workingIndicatorRows = state.busy ? 2 : 0;
   const maxItems = transcriptHeight(
-    terminalRows,
+    renderRows,
     modalOpen,
     agentPanelRows(agentRuns) + streamingAnswerRows + taskPanelRows + workingIndicatorRows
   );
@@ -963,7 +1030,8 @@ export function TerminalConsole(props: ConsoleProps) {
       live = false;
     };
   }, [services]);
-  const authedProviders = useAuthenticatedProviders(services, state.status);
+  const authRefreshKey = useMemo(() => ({status:state.status,modal:state.modal.kind}), [state.status,state.modal.kind]);
+  const authedProviders = useAuthenticatedProviders(services, authRefreshKey);
   const boundModelId = conductor.snapshot().modelId;
   const boundProvider = boundModelId.includes("/") ? boundModelId.split("/")[0] : boundModelId;
   const modelAuthed = authedProviders === null || authedProviders.has(boundProvider);
@@ -972,119 +1040,54 @@ export function TerminalConsole(props: ConsoleProps) {
     modelAuthed || !snapshot.model
       ? snapshot
       : { ...snapshot, model: { ...snapshot.model, provider: "no model", id: "run /login" } };
-  return jsxs(Box, {
-    flexDirection: "column",
-    children: [
-      agentsOpen
-        ? jsx(AgentsView, {
-            theme: adapter,
-            runs: agentRuns,
-            activity: subagentActivity,
-            tokens: taskTokens,
-            onExit: () => setAgentsOpen(false)
-          })
-        : jsxs(Fragment, {
-            children: [
-              jsx(Banner, {
-                theme: adapter,
-                modelId: bannerModelId,
-                workspace: process.cwd(),
-                version: VERSION,
-                verbose,
-                quiet: quietStartup,
-                compact: false,
-                started: liveMessages.length > 0,
-                branch,
-                name: welcomeName,
-                sweep,
-                startup: startupMap,
-                variantSeed: welcomeSeed
-              }),
-              compactNote !== null
-                ? jsxs(Box, {
-                    flexDirection: "column",
-                    borderStyle: "round",
-                    borderColor: adapter.colors["borderMuted"],
-                    paddingX: 1,
-                    marginBottom: 1,
-                    children: [
-                      jsx(Text, {
-                        children: adapter.color("accent", "◆ Context condensed — fresh session, history summarized")
-                      }),
-                      compactNote.length > 0
-                        ? jsxs(Fragment, {
-                            children: [
-                              jsx(Text, { children: adapter.muted("Files carried into the new context:") }),
-                              compactNote.map((file, index) =>
-                                jsx(Text, { children: adapter.muted(`  · ${file}`) }, index)
-                              )
-                            ]
-                          })
-                        : jsx(Text, {
-                            children: adapter.muted("No files re-attached; the summary digest carries the history.")
-                          })
-                    ]
-                  })
-                : null,
-              jsx(MessageList, {
-                messages: liveMessages,
-                theme: adapter,
-                showThinking: state.showReasoning,
-                showImages: state.showImages,
-                expandToolOutputs: expandTools,
-                maxItems,
-                displayBlocks: [...state.blocks]
-              }),
-              liveAnswer.current !== null && answerText.current
-                ? jsx(Box, {
-                    flexDirection: "column",
-                    marginBottom: 1,
-                    children: jsx(StreamingMarkdown, { theme: adapter, children: answerText.current })
-                  })
-                : null,
-              showTaskPanel
-                ? jsx(TaskPanel, {
-                    theme: adapter,
-                    snapshot,
-                    toolExecutions: SHOW_TOOL_ACTIVITY ? toolExecutions : {},
-                    expandToolOutputs: expandTools,
-                    pendingMessages
-                  })
-                : null,
-              jsx(WorkingIndicator, {
-                theme: adapter,
-                busy: state.busy || conductor.snapshot().phase === "condensing",
-                phase: conductor.snapshot().phase
-              }),
-              jsx(Composer, {
-                theme: adapter,
-                buffer: state.buffer,
-                caret: state.caret,
-                busy: state.busy,
-                suggestions,
-                highlight
-              }),
-              jsx(StatusBar, {
-                theme: adapter,
-                snapshot: statusBarSnapshot,
-                branch,
-                providerCount,
-                status: state.status,
-                permissionMode: conductor.permissionMode()
-              }),
-              jsx(BackgroundAgents, { theme: adapter, runs: agentRuns, tokens: taskTokens })
-            ]
-          }),
-      jsx(OverlayHost, {
-        modal: state.modal,
-        services,
-        theme: adapter,
-        dispatch,
-        closeModal: () => dispatch({ type: "modal:close" })
-      })
-    ]
+  return jsx(Box, {
+    flexDirection: "column", width: terminalColumns, height: renderRows, overflow: "hidden",
+    children: modalOpen
+      ? jsx(ScrollViewport, { follow: false, children: jsx(OverlayHost, {
+          modal: state.modal, services, theme: adapter, dispatch,
+          closeModal: () => dispatch({ type: "modal:close" })
+        }) }, state.modal.kind)
+      : agentsOpen
+      ? jsx(ScrollViewport, { follow: false, children: jsx(AgentsView, {
+          theme: adapter, runs: agentRuns, activity: subagentActivity, tokens: taskTokens,
+          onExit: () => setAgentsOpen(false)
+        }) }, "agents")
+      : jsxs(Fragment, { children: [
+          terminalRows >= 18 ? jsx(Box, { flexShrink: 0, flexDirection: "column", children: jsx(Banner, {
+            theme: adapter, modelId: bannerModelId, workspace: process.cwd(), version: VERSION,
+            verbose, quiet: quietStartup, compact: liveMessages.length > 0 || terminalRows < 32,
+            started: liveMessages.length > 0, branch, name: welcomeName, sweep,
+            startup: startupMap, variantSeed: welcomeSeed
+          }) }) : null,
+          jsx(ScrollViewport, { children: jsxs(Fragment, { children: [
+            compactNote !== null ? jsx(Text, { children: adapter.muted(
+              `Context condensed.${compactNote.length ? " Files carried: " + compactNote.join(", ") : ""}`
+            ) }) : null,
+            jsx(MessageList, {
+              messages: liveMessages, theme: adapter, showThinking: state.showReasoning,
+              showImages: state.showImages, expandToolOutputs: expandTools,
+              maxItems: liveMessages.length + state.blocks.length, displayBlocks: [...state.blocks]
+            }),
+            state.showReasoning && liveReason.current !== null && reasonText.current ? jsx(Box, {
+              flexDirection: "column", marginBottom: 1,
+              children: jsx(StreamingMarkdown, {theme: adapter, dim: true, children: reasonText.current})
+            }) : null,
+            liveAnswer.current !== null && answerText.current ? jsx(Box, {
+              flexDirection: "column", marginBottom: 1,
+              children: jsx(StreamingMarkdown, {theme: adapter, children: answerText.current})
+            }) : null,
+            showTaskPanel ? jsx(TaskPanel, {theme: adapter, snapshot,
+              toolExecutions: SHOW_TOOL_ACTIVITY ? toolExecutions : {},
+              expandToolOutputs: expandTools, pendingMessages}) : null,
+            jsx(BackgroundAgents, {theme: adapter, runs: agentRuns, tokens: taskTokens})
+          ] }) }, snapshot.sessionId),
+          jsx(Box, {flexDirection: "column", flexShrink: 0, children: jsxs(Fragment, {children: [
+            jsx(WorkingIndicator, {theme: adapter, busy: state.busy || conductor.snapshot().phase === "condensing", phase: conductor.snapshot().phase, reducedMotion: services?.settings.get("reducedMotion") ?? false}),
+            jsx(Composer, {theme: adapter, buffer: state.buffer, caret: state.caret,
+              busy: state.busy, suggestions, highlight, paddingX: services?.settings.get("editorPaddingX") ?? 1}),
+            terminalRows >= 12 ? jsx(StatusBar, {theme: adapter, snapshot: statusBarSnapshot, branch,
+              providerCount, status: state.status, permissionMode: conductor.permissionMode()}) : null
+          ]})})
+        ]})
   });
 }
-
-// Silence unused warnings for cross-module imports that may not be used directly here.
-void NO_INTENT;

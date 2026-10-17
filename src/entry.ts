@@ -43,11 +43,21 @@ function isProgramEntry(): boolean {
   }
 }
 
+export async function resolveBoot(result: Promise<number>): Promise<number> {
+  try {
+    return await result;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    process.stderr.write(`${BRAND.name}: ${message}\n`);
+    return 1;
+  }
+}
+
 process.title = BRAND.binNames[0];
 installMcpNoiseFilter();
 if (isProgramEntry()) {
   ensureHeapHeadroom();
-  void boot(processArgv.slice(2)).then((code) => {
+  void resolveBoot(boot(processArgv.slice(2))).then((code) => {
     process.exitCode = code;
     process.stdout.write("", () => process.exit(code));
     setTimeout(() => process.exit(code), 1e3).unref();

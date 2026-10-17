@@ -14,6 +14,7 @@ import { SessionLibrary } from "../../sessions/library.js";
 import { PreferenceStore } from "../../settings/manager.js";
 import { sessionScopeDir } from "./session.js";
 import { createAuthVault } from "../auth-vault.js";
+import type { SessionConductor } from "../../conductor/contract.js";
 import type { BootContext, Runner } from "../contract.js";
 import { buildSessionConductor } from "./session.js";
 import { resolveServerGatewayUrls } from "./server-mode.js";
@@ -28,7 +29,7 @@ const EXIT_OK = 0;
  * wired here from the boot-layer pieces so the conductor and the UI share one
  * credential store and one gateway-base-url mapping.
  */
-export function buildOverlayServices(ctx: BootContext, conductor: { updateGatewayBaseUrls(map: Record<string, string>): void }) {
+export function buildOverlayServices(ctx: BootContext, conductor: SessionConductor) {
   const cwd = ctx.invocation.cwd ?? process.cwd();
   const vault = createAuthVault(ctx.workspace.authPath);
   return {

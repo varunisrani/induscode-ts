@@ -131,7 +131,7 @@ export interface Invocation {
     readonly cwd?: string;
     /** Named credential account to authenticate with (`--account`). */
     readonly account?: string;
-    /** Reasoning effort (`--thinking`): off / minimal / low / medium / high / xhigh. */
+    /** Reasoning effort (`--thinking`): off / minimal / low / medium / high / xhigh / max (model-dependent). */
     readonly thinking?: string;
     /** Replacement system prompt (`--system`); a path is read as a file, else literal text. */
     readonly system?: string;

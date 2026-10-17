@@ -11,6 +11,8 @@
  */
 import { EMPTY_CONSOLE_STATE, NO_MODAL, transitionModal, type ConsoleEvent, type ConsoleState } from "./contract.js";
 
+import { previousGrapheme, nextGrapheme, moveGrapheme, snapGrapheme } from "./input/graphemes.js";
+
 function clamp(offset: number, max: number) {
   if (offset < 0) return 0;
   if (offset > max) return max;
@@ -38,14 +40,15 @@ function insertBuffer(state: ConsoleState, text: string) {
 function erasePrev(state: ConsoleState) {
   const at = clamp(state.caret, state.buffer.length);
   if (at === 0) return state;
-  const next = state.buffer.slice(0, at - 1) + state.buffer.slice(at);
-  return withBuffer(state, next, at - 1);
+  const previous = previousGrapheme(state.buffer, at);
+  const next = state.buffer.slice(0, previous) + state.buffer.slice(at);
+  return withBuffer(state, next, previous);
 }
 
 function eraseNext(state: ConsoleState) {
   const at = clamp(state.caret, state.buffer.length);
   if (at >= state.buffer.length) return state;
-  const next = state.buffer.slice(0, at) + state.buffer.slice(at + 1);
+  const next = state.buffer.slice(0, at) + state.buffer.slice(nextGrapheme(state.buffer, at));
   return withBuffer(state, next, at);
 }
 
@@ -97,6 +100,10 @@ function patchRow(state: ConsoleState, id: string, text: string) {
  */
 export function consoleReducer(state: ConsoleState, event: ConsoleEvent): ConsoleState {
   switch (event.type) {
+    case "view:reset":
+      return { ...state, rows: [], blocks: [], buffer: "", caret: 0, historyAt: null, stash: "", modal: NO_MODAL, busy: false };
+    case "display:set":
+      return { ...state, [event.key]: event.value };
     // Composer buffer & caret
     case "buffer:set":
       return setBuffer(state, event.text);
@@ -119,9 +126,9 @@ export function consoleReducer(state: ConsoleState, event: ConsoleEvent): Consol
     case "buffer:eraseNext":
       return eraseNext(state);
     case "caret:move":
-      return { ...state, caret: clamp(state.caret + event.delta, state.buffer.length) };
+      return { ...state, caret: moveGrapheme(state.buffer, state.caret, event.delta) };
     case "caret:jump":
-      return { ...state, caret: clamp(event.offset, state.buffer.length) };
+      return { ...state, caret: snapGrapheme(state.buffer, event.offset) };
     // History ring
     case "history:push":
       return pushHistory(state, event.text);

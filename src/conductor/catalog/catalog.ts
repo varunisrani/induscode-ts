@@ -1,7 +1,8 @@
 import { z } from "zod";
-import { getModels, getProviders } from "indusagi/ai";
+import { getModels, getProviders, modelRegistry } from "indusagi/ai";
 import type { KnownProvider, Model } from "indusagi/ai";
 import type { ModelCardRef } from "../contract.js";
+import { applyCodingAgentModelOverlay } from "../../models.js";
 
 export interface CatalogCard {
   readonly id: string;
@@ -29,6 +30,7 @@ const rawModelGate = z.object({
 });
 
 const EXCLUDED_PROVIDERS = new Set(["mock"]);
+applyCodingAgentModelOverlay(modelRegistry);
 const frameworkSource: CatalogSource = {
   providers: () => getProviders().filter((provider) => !EXCLUDED_PROVIDERS.has(String(provider))),
   models: (provider) => getModels(provider as KnownProvider),

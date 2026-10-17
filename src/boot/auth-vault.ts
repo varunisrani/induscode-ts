@@ -20,13 +20,12 @@
  * launch wiring needs. When the concrete multi-account vault arrives it replaces
  * this adapter at the one call site in {@link "./boot"}.
  */
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
 import {
   ensureFreshOAuthCredentials,
   getOAuthProvider,
 } from "indusagi/ai";
 import type { AuthVault } from "../launch.js";
+import { atomicWritePrivateFileSync, readPrivateFileSync } from "../security/private-state.js";
 
 interface OAuthRecord {
   access: string;
@@ -68,8 +67,9 @@ function normaliseRecord(value: unknown): NormalisedRecord | undefined {
 }
 
 function readAuthFile(filePath: string): Record<string, Record<string, NormalisedRecord>> {
+  const text = readPrivateFileSync(filePath);
+  if (text === null) return {};
   try {
-    const text = readFileSync(filePath, "utf8");
     const parsed = JSON.parse(text);
     if (parsed === null || typeof parsed !== "object") return {};
     const file: Record<string, Record<string, NormalisedRecord>> = {};
@@ -92,8 +92,7 @@ function writeAuthFile(
   filePath: string,
   data: Record<string, Record<string, NormalisedRecord>>,
 ): void {
-  mkdirSync(dirname(filePath), { recursive: true });
-  writeFileSync(filePath, `${JSON.stringify(data, null, 2)}\n`, { mode: 384 });
+  atomicWritePrivateFileSync(filePath, `${JSON.stringify(data, null, 2)}\n`);
 }
 
 function toCredentials(record: OAuthStoredRecord): OAuthRecord {

@@ -2,44 +2,17 @@
  * Saffron picker boards — the themed `/settings` and `/model` overlays.
  */
 import chalk from "chalk";
-import { readFileSync } from "node:fs";
-import { homedir } from "node:os";
-import { join } from "node:path";
 import { useEffect, useMemo, useState } from "indusagi/react-host";
 import { Box, Text, useInput } from "indusagi/react-host/ink";
 import {
   matchesSearchQuery,
   wrapSelectionIndex,
   type InkThemeAdapter,
-  type SettingsDialogItem,
-  type Model
+  type SettingsDialogItem
 } from "indusagi/react-ink";
+import type { Model } from "indusagi/ai";
 import { Fragment, jsx, jsxs } from "indusagi/react-host/jsx-runtime";
-import { isGatewayEligibleProvider } from "../../boot/runners/server-mode.js";
 
-function readServerTierInfo() {
-  let signedIn = false;
-  try {
-    const file = join(homedir(), ".indusagi", "agent", "server-token.json");
-    const token = JSON.parse(readFileSync(file, "utf8"));
-    signedIn = typeof token.expires_at === "string" && new Date(token.expires_at).getTime() - Date.now() > 5 * 60 * 1e3;
-  } catch {
-    signedIn = false;
-  }
-  const localKeys = new Set<string>();
-  try {
-    const file = join(homedir(), ".indusagi", "agent", "auth.json");
-    const vault = JSON.parse(readFileSync(file, "utf8"));
-    for (const [provider, entry] of Object.entries(vault)) {
-      if (entry !== null && typeof entry === "object" && Object.keys(entry).length > 0) {
-        localKeys.add(provider);
-      }
-    }
-  } catch {
-    // ignore
-  }
-  return { signedIn, localKeys };
-}
 
 function truncate(text: string, width: number): string {
   if (text.length <= width) return text;
@@ -155,6 +128,7 @@ export interface SettingsBoardProps {
 }
 
 export function SettingsBoard({ theme, items, onClose }: SettingsBoardProps) {
+  const [error, setError] = useState<string>();
   const [query, setQuery] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
   const filtered = useMemo(
@@ -172,7 +146,11 @@ export function SettingsBoard({ theme, items, onClose }: SettingsBoardProps) {
     const item = filtered[selectedIndex];
     if (!item) return;
     const value = nextValue(item.values, item.value, direction);
-    if (value && value !== item.value) void item.onChange(value);
+    if (value && value !== item.value) {
+      setError(undefined);
+      const failed = (error: unknown) => setError(error instanceof Error ? error.message : String(error));
+      try { void Promise.resolve(item.onChange(value)).catch(failed); } catch (error) { failed(error); }
+    }
   };
   useInput((input, key) => {
     if (key.escape) return onClose();
@@ -187,7 +165,7 @@ export function SettingsBoard({ theme, items, onClose }: SettingsBoardProps) {
   const { start, budget, below } = windowAround(filtered.length, selectedIndex);
   const visible = filtered.slice(start, start + budget);
   const selected = filtered[selectedIndex];
-  const detail = selected ? `${selected.description}  ·  ${selected.values.join(" / ")}` : void 0;
+  const detail = error ?? (selected ? `${selected.description}  ·  ${selected.values.join(" / ")}` : void 0);
   const list =
     items.length === 0
       ? jsx(Text, { children: theme.muted("No settings are available.") })
@@ -242,13 +220,8 @@ export function ModelBoard({ theme, models, onClose, onSelect, search }: ModelBo
   const [query, setQuery] = useState(search ?? "");
   const [selectedIndex, setSelectedIndex] = useState(0);
   useEffect(() => setQuery(search ?? ""), [search]);
-  const serverTier = useMemo(readServerTierInfo, []);
-  const isServerTier = (provider: string) =>
-    serverTier.signedIn && isGatewayEligibleProvider(provider) && !serverTier.localKeys.has(provider);
-  const available = useMemo(
-    () => models.filter((model) => serverTier.localKeys.has(model.provider) || isServerTier(model.provider)),
-    [models, serverTier]
-  );
+  // Authentication belongs to the injected service/parent, never a guessed HOME path.
+  const available = models;
   const filtered = useMemo(() => available.filter((model) => modelMatches(model, query)), [available, query]);
   useEffect(() => setSelectedIndex(0), [query]);
   useEffect(() => {
@@ -289,10 +262,10 @@ export function ModelBoard({ theme, models, onClose, onSelect, search }: ModelBo
                   jsx(Box, { width: 2, children: jsx(Text, { children: isSelected ? theme.color("accent", "›") : " " }) }),
                   jsx(Text, { bold: isSelected, children: theme.color("text", model.id) }),
                   model.name ? jsx(Text, { children: theme.dim(`  ${model.name}`) }) : null,
-                  isServerTier(model.provider) ? jsx(Text, { children: theme.color("accent", "  ⫡ server") }) : null
+                  jsx(Text, { children: theme.dim(`  ${model.provider}`) })
                 ]
               },
-              model.id
+              `${model.provider}/${model.id}`
             );
           })
         });

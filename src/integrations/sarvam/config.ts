@@ -12,20 +12,22 @@
  * prefer env / CLI to avoid committing secrets.
  */
 
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import type { SarvamHostConfig } from "./types.js";
+import { atomicWritePrivateFileSync, readPrivateFileSync } from "../../security/private-state.js";
 
 const ENV_KEY = "SARVAM_API_KEY";
 const ENV_DISABLE = "SARVAM_DISABLED";
 const ENV_BASE_URL = "SARVAM_API_BASE_URL";
 const ENV_BASE_PATH = "SARVAM_MCP_BASE_PATH";
 
-function readJsonFile(path: string): Record<string, unknown> | undefined {
+function readJsonFile(path: string, sensitive = false): Record<string, unknown> | undefined {
   try {
-    if (!existsSync(path)) return undefined;
-    const raw = readFileSync(path, "utf8");
+    if (!sensitive && !existsSync(path)) return undefined;
+    const raw = sensitive ? readPrivateFileSync(path) : readFileSync(path, "utf8");
+    if (raw === null) return undefined;
     const parsed = JSON.parse(raw) as unknown;
     if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
       return undefined;
@@ -36,11 +38,11 @@ function readJsonFile(path: string): Record<string, unknown> | undefined {
   }
 }
 
-function configFromRecord(rec: Record<string, unknown> | undefined): SarvamHostConfig | undefined {
+function configFromRecord(rec: Record<string, unknown> | undefined, includeApiKey = true): SarvamHostConfig | undefined {
   if (!rec) return undefined;
   const enabled = rec.enabled === false ? false : true;
   const id = typeof rec.id === "string" && rec.id.trim() ? rec.id.trim() : "sarvam";
-  const apiKey = typeof rec.apiKey === "string" ? rec.apiKey.trim() : undefined;
+  const apiKey = includeApiKey && typeof rec.apiKey === "string" ? rec.apiKey.trim() : undefined;
   const baseUrl = typeof rec.baseUrl === "string" ? rec.baseUrl.trim() : undefined;
   const basePath = typeof rec.basePath === "string" ? rec.basePath.trim() : undefined;
   const command = typeof rec.command === "string" ? rec.command.trim() : undefined;
@@ -73,9 +75,9 @@ export function saveSarvamConfig(
   config: SarvamHostConfig,
   where: "profile" | "project" = "profile",
   cwd = process.cwd(),
+  home = homedir(),
 ): string {
-  const path = where === "project" ? projectSarvamPath(cwd) : profileSarvamPath();
-  mkdirSync(dirname(path), { recursive: true });
+  const path = where === "project" ? projectSarvamPath(cwd) : profileSarvamPath(home);
   const body: Record<string, unknown> = {
     id: config.id ?? "sarvam",
     enabled: config.enabled !== false,
@@ -84,8 +86,8 @@ export function saveSarvamConfig(
   if (config.baseUrl) body.baseUrl = config.baseUrl;
   if (config.command) body.command = config.command;
   // Only persist key if caller intentionally set it (e.g. interactive connect with key arg).
-  if (config.apiKey) body.apiKey = config.apiKey;
-  writeFileSync(path, JSON.stringify(body, null, 2) + "\n", "utf8");
+  if (where === "profile" && config.apiKey) body.apiKey = config.apiKey;
+  atomicWritePrivateFileSync(path, JSON.stringify(body, null, 2) + "\n");
   return path;
 }
 
@@ -118,9 +120,9 @@ export function resolveSarvamConfig(opts: ResolveSarvamOptions = {}): SarvamHost
 
   const fromArgKey = opts.apiKey?.trim();
   const fromEnvKey = env[ENV_KEY]?.trim();
-  const fromProject = configFromRecord(readJsonFile(projectSarvamPath(cwd)));
+  const fromProject = configFromRecord(readJsonFile(projectSarvamPath(cwd)), false);
   const fromProfile = configFromRecord(
-    readJsonFile(profileSarvamPath(opts.home ?? homedir())),
+    readJsonFile(profileSarvamPath(opts.home ?? homedir()), true),
   );
 
   const fileBase = fromProject ?? fromProfile;

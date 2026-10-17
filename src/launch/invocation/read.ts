@@ -9,6 +9,7 @@ import {
   isToolName,
 } from "../contract.js";
 import { FLAG_SPECS, type GroupedFlagSpec } from "./flags.js";
+import { isReasoningEffortSupported } from "../../models.js";
 
 interface ParseState {
   flags: Record<string, FlagValue>;
@@ -154,14 +155,14 @@ function readBool(flags: Record<string, FlagValue>, key: string): boolean {
 }
 
 function deriveMode(flags: Record<string, FlagValue>): Invocation["mode"] {
-  if (readBool(flags, "json")) return "rpc";
   if (readBool(flags, "print") && !readBool(flags, "interactive")) return "json";
+  if (readBool(flags, "json")) return "rpc";
   return "text";
 }
 
-function resolveThinking(flags: Record<string, FlagValue>): Invocation["thinking"] {
+function resolveThinking(flags: Record<string, FlagValue>, modelId: string | undefined): Invocation["thinking"] {
   const raw = readString(flags, "thinking");
-  return raw !== undefined && isThinkingEffort(raw) ? raw : undefined;
+  return raw !== undefined && isThinkingEffort(raw) && isReasoningEffortSupported(modelId, raw) ? raw : undefined;
 }
 
 function resolveTools(flags: Record<string, FlagValue>): Invocation["tools"] {
@@ -215,7 +216,7 @@ export function readInvocation(argv: readonly string[]): Invocation {
   const cwd = readString(flags, "cwd");
   const system = readString(flags, "system");
   const appendSystem = readString(flags, "append-system");
-  const thinking = resolveThinking(flags);
+  const thinking = resolveThinking(flags, model);
   const tools = resolveTools(flags);
   return {
     mode,

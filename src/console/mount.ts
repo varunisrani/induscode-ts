@@ -8,6 +8,38 @@ import { DEFAULT_SLASH_REGISTRY } from "./slash/index.js";
 import { resolveTheme } from "./theme/index.js";
 import type { OverlayServices, SessionConductor, SlashRegistry } from "./contract.js";
 
+export const SYNC_OUTPUT_BEGIN = "\x1b[?2026h";
+export const SYNC_OUTPUT_END = "\x1b[?2026l";
+
+function supportsSynchronizedOutput(stream: NodeJS.WriteStream): boolean {
+  if (!stream.isTTY || process.env["INDUS_TUI_SYNC_OUTPUT"] === "0") return false;
+  const term = process.env["TERM"] ?? "";
+  return process.env["TMUX"] === undefined && process.env["STY"] === undefined &&
+    !term.startsWith("screen") && !term.startsWith("tmux");
+}
+
+/** Wrap complete Ink writes in DEC mode 2026 so terminals paint each frame atomically. */
+export function synchronizedOutputStream(
+  stream: NodeJS.WriteStream,
+  enabled = supportsSynchronizedOutput(stream)
+): NodeJS.WriteStream {
+  if (!enabled) return stream;
+  const write = (chunk: string | Uint8Array, encodingOrCallback?: BufferEncoding | ((error?: Error | null) => void), callback?: (error?: Error | null) => void) => {
+    const framed = typeof chunk === "string"
+      ? `${SYNC_OUTPUT_BEGIN}${chunk}${SYNC_OUTPUT_END}`
+      : Buffer.concat([Buffer.from(SYNC_OUTPUT_BEGIN), Buffer.from(chunk), Buffer.from(SYNC_OUTPUT_END)]);
+    if (typeof encodingOrCallback === "function") return stream.write(framed, encodingOrCallback);
+    return stream.write(framed, encodingOrCallback, callback);
+  };
+  return new Proxy(stream, {
+    get(target, property) {
+      if (property === "write") return write;
+      const value = Reflect.get(target, property, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    }
+  });
+}
+
 /**
  * Options for {@link mountConsole}.
  */
@@ -50,7 +82,17 @@ export async function mountConsole(
       instance.unmount();
     }
   };
-  const instance = render(createElement(TerminalConsole, props));
-  await instance.waitUntilExit();
-  return { clean: exited };
+  const wasRaw = process.stdin.isRaw === true;
+  const stdout = synchronizedOutputStream(process.stdout);
+  const instance = render(createElement(TerminalConsole, props), { exitOnCtrlC: false, stdout });
+  try {
+    await instance.waitUntilExit();
+    return { clean: exited };
+  } finally {
+    // Ink's passive input-hook cleanup may run after waitUntilExit resolves.
+    // Restore the terminal before handing control back to the caller.
+    instance.unmount();
+    if (process.stdin.isTTY) process.stdin.setRawMode(wasRaw);
+    if (process.stdout.isTTY) process.stdout.write("\x1b[?25h");
+  }
 }

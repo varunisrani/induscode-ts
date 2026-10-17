@@ -2,6 +2,7 @@
  * BackgroundAgents — the live sub-agent panel pinned below the input.
  */
 import { Box, Text } from "indusagi/react-host/ink";
+import { useEffect, useState } from "indusagi/react-host";
 import { splitAssistantMessage, type InkThemeAdapter } from "indusagi/react-ink";
 import { jsx, jsxs } from "indusagi/react-host/jsx-runtime";
 import type { AgentMessage } from "indusagi/agent";
@@ -100,11 +101,23 @@ export interface BackgroundAgentsProps {
 /**
  * Render the background-agents panel, or nothing when no run is in flight.
  */
+export function useAgentClock(active: boolean, supplied?: number): number {
+  const [now, setNow] = useState(Date.now);
+  useEffect(() => {
+    if (!active || supplied !== undefined) return;
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [active, supplied]);
+  return supplied ?? now;
+}
+
 export function BackgroundAgents({ theme, runs, tokens, now }: BackgroundAgentsProps) {
-  const clock = now ?? Date.now();
+  const clock = useAgentClock(runs.some(run => run.status === "running"), now);
   const runningCount = runs.reduce((n, run) => (run.status === "running" ? n + 1 : n), 0);
   if (runningCount === 0) return null;
-  const visible = runs.slice(-MAX_VISIBLE_RUNS);
+  const running = runs.filter(run => run.status === "running");
+  const recentDone = runs.filter(run => run.status !== "running").slice(-Math.max(0, MAX_VISIBLE_RUNS - running.length));
+  const visible = [...running, ...recentDone].slice(0, MAX_VISIBLE_RUNS);
   return jsxs(Box, {
     flexDirection: "column",
     marginTop: 1,

@@ -20,7 +20,7 @@ export const FLAG_GROUPS: readonly { readonly id: FlagGroup; readonly title: str
   { id: "meta", title: "Meta" },
 ];
 
-const THINKING_CHOICES = ["off", "minimal", "low", "medium", "high", "xhigh"];
+const THINKING_CHOICES = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 
 export const FLAG_SPECS: readonly GroupedFlagSpec[] = [
   /* ---- Output ---------------------------------------------------------- */
@@ -109,6 +109,18 @@ export const FLAG_SPECS: readonly GroupedFlagSpec[] = [
     kind: "boolean",
     group: "context",
     describe: "Continue the most recent session in this directory.",
+  },
+  {
+    name: "--trust-project-addons",
+    kind: "boolean",
+    group: "context",
+    describe: "Trust executable project addons for the canonical workspace and their current content digest.",
+  },
+  {
+    name: "--allow-context-import",
+    kind: "list",
+    group: "context",
+    describe: "Explicitly approve an exact external context file (comma-separated or repeated). Secret-like files remain blocked.",
   },
   /* ---- Tools ----------------------------------------------------------- */
   {

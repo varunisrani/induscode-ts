@@ -49,6 +49,12 @@ function ndjsonStrategy(): OneshotStrategy {
     },
     onSignal(signal: unknown, ctx: ChannelContext): void {
       const s = signal as { kind: string };
+      // Running shell commands can emit thousands of rolling progress snapshots,
+      // each containing the same bounded output tail. Serializing every snapshot
+      // ignores stdout backpressure and can retain hundreds of megabytes. The
+      // terminal tool result is emitted in full by tool_end, which is the durable
+      // event required by one-shot consumers and benchmark trajectory conversion.
+      if (s.kind === "tool_update") return;
       ctx.out.write(ctx.framer.encodeLine({ type: "signal", name: s.kind, body: s }));
     },
     finish(state: ConductorState, ctx: ChannelContext): number {

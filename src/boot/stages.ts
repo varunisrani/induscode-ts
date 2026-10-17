@@ -29,6 +29,7 @@ import { tokenizeInvocation } from "./invocation.js";
 import { applyUpgrades } from "./upgrade/apply.js";
 import { ensureDirs } from "../workspace/locator.js";
 import type { BootContext, Stage } from "./contract.js";
+import { createCodingAgentModelRegistry } from "../models.js";
 
 /**
  * Materialise the resolved workspace directories on disk.
@@ -110,11 +111,7 @@ async function loadDefaultSettings(): Promise<unknown> {
 }
 
 async function loadModelRegistry(): Promise<unknown> {
-  const mod = (await import("indusagi/ai")) as { ModelRegistry?: unknown; modelRegistry?: unknown };
-  if (typeof mod.ModelRegistry === "function") {
-    return new (mod.ModelRegistry as new () => unknown)();
-  }
-  return mod.modelRegistry;
+  return createCodingAgentModelRegistry();
 }
 
 /**
@@ -164,4 +161,4 @@ export async function runStages(initial: BootContext, stages: readonly Stage[] =
   return ctx;
 }
 
-export { locateWorkspace, upgrade, buildInvocation, resolveResources, selectRunnerStage };
+export { locateWorkspace, upgrade, buildInvocation, resolveResources, selectRunnerStage, loadModelRegistry };

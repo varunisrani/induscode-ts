@@ -65,9 +65,10 @@ export interface WorkingIndicatorProps {
   readonly theme: InkThemeAdapter;
   readonly busy: boolean;
   readonly phase?: string;
+  readonly reducedMotion?: boolean;
 }
 
-export function WorkingIndicator({ theme, busy, phase }: WorkingIndicatorProps) {
+export function WorkingIndicator({ theme, busy, phase, reducedMotion = false }: WorkingIndicatorProps) {
   const [frame, setFrame] = useState(0);
   const startRef = useRef<number | null>(null);
   const wordOffsetRef = useRef(0);
@@ -80,14 +81,14 @@ export function WorkingIndicator({ theme, busy, phase }: WorkingIndicatorProps) 
       startRef.current = Date.now();
       wordOffsetRef.current = Math.floor(Math.random() * WORKING_WORDS.length);
     }
-    const id = setInterval(() => setFrame((f) => (f + 1) % SPINNER_FRAMES.length), FRAME_MS);
+    const id = setInterval(() => setFrame((f) => (f + 1) % SPINNER_FRAMES.length), reducedMotion ? 1000 : FRAME_MS);
     return () => clearInterval(id);
-  }, [busy]);
+  }, [busy, reducedMotion]);
   if (!busy) return null;
   const elapsedMs = startRef.current !== null ? Date.now() - startRef.current : 0;
   const elapsedSec = Math.floor(elapsedMs / 1000);
-  const spinner = SPINNER_FRAMES[frame % SPINNER_FRAMES.length];
-  const label = phaseLabel(phase) ?? pickWord(wordOffsetRef.current + Math.floor(elapsedMs / WORD_MS));
+  const spinner = reducedMotion ? "•" : SPINNER_FRAMES[frame % SPINNER_FRAMES.length];
+  const label = phaseLabel(phase) ?? (reducedMotion ? "Working" : pickWord(wordOffsetRef.current + Math.floor(elapsedMs / WORD_MS)));
   return jsxs(Box, {
     marginTop: 1,
     children: [

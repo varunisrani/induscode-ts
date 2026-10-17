@@ -52,14 +52,20 @@ export const TRANSLATOR_TABLE: TranslatorTable = {
   },
   turn_end: (event) => [{ kind: "turn_end", usage: usageOf(event.message) }],
   message_update: (event) => translateStreamEvent(event.assistantMessageEvent),
-  tool_execution_start: (event) => [{ kind: "tool_start", id: event.toolCallId, name: event.toolName }],
+  tool_execution_start: (event) => [{ kind: "tool_start", id: event.toolCallId, name: event.toolName, args: event.args }],
   tool_execution_update: (event) => [{
     kind: "tool_update",
     id: event.toolCallId,
     name: event.toolName,
     details: event.partialResult?.details,
   }],
-  tool_execution_end: (event) => [{ kind: "tool_end", id: event.toolCallId, ok: !event.isError }],
+  tool_execution_end: (event) => [{
+    kind: "tool_end",
+    id: event.toolCallId,
+    ok: !event.isError,
+    result: event.result,
+    isError: event.isError,
+  }],
 };
 
 export function translateAgentEvent(event: AgentEvent): SessionSignal[] {

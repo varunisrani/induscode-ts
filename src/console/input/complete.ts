@@ -76,13 +76,13 @@ function splitPathStem(stem: string) {
   const body = stem.slice(sigil.length);
   const slash = body.lastIndexOf("/");
   if (slash < 0) return { dir: ".", leaf: body, sigil };
-  return { dir: body.slice(0, slash) || ".", leaf: body.slice(slash + 1), sigil };
+  return { dir: body.slice(0, slash) || "/", leaf: body.slice(slash + 1), sigil };
 }
 
 function completePath(stem: string, readDir: DirReader): Suggestion[] {
   const { dir, leaf, sigil } = splitPathStem(stem);
   const lowerLeaf = leaf.toLowerCase();
-  const prefix = dir === "." ? "" : `${dir}/`;
+  const prefix = dir === "." ? "" : dir === "/" ? "/" : `${dir}/`;
   const matches = readDir(dir)
     .filter((e) => e.name.toLowerCase().startsWith(lowerLeaf))
     .sort((a, b) => {

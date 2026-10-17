@@ -35,7 +35,81 @@ import {
   type InterceptorChain,
   createAddonHost,
 } from "../../addons/index.js";
+import { createHash } from "node:crypto";
+import { lstatSync, readFileSync, readdirSync, realpathSync } from "node:fs";
+import { join, relative, resolve } from "node:path";
+import { atomicWritePrivateFileSync, readPrivateFileSync } from "../../security/private-state.js";
 import type { BootContext } from "../contract.js";
+
+interface AddonTrustRecord {
+  readonly root: string;
+  readonly digest: string;
+  readonly approvedAt: string;
+}
+
+interface AddonTrustStore {
+  readonly version: 1;
+  readonly projects: readonly AddonTrustRecord[];
+}
+
+const TRUST_FILE = "addon-trust.json";
+
+function hashAddonTree(addonsDir: string): string | null {
+  let root: string;
+  try {
+    const rootStat = lstatSync(addonsDir);
+    if (rootStat.isSymbolicLink() || !rootStat.isDirectory()) return null;
+    root = realpathSync(addonsDir);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  }
+  const files: string[] = [];
+  const visit = (dir: string): void => {
+    for (const entry of readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+      const path = join(dir, entry.name);
+      const info = lstatSync(path);
+      if (info.isSymbolicLink()) throw new Error(`Refusing symlink in project addon tree: ${path}`);
+      if (info.isDirectory()) visit(path);
+      else if (info.isFile()) files.push(path);
+      else throw new Error(`Refusing special file in project addon tree: ${path}`);
+    }
+  };
+  visit(root);
+  const hash = createHash("sha256");
+  for (const file of files) {
+    hash.update(relative(root, file));
+    hash.update("\0");
+    hash.update(readFileSync(file));
+    hash.update("\0");
+  }
+  return hash.digest("hex");
+}
+
+function readTrustStore(path: string): AddonTrustStore {
+  const raw = readPrivateFileSync(path);
+  if (raw === null) return { version: 1, projects: [] };
+  try {
+    const parsed = JSON.parse(raw) as Partial<AddonTrustStore>;
+    if (parsed.version !== 1 || !Array.isArray(parsed.projects)) return { version: 1, projects: [] };
+    return {
+      version: 1,
+      projects: parsed.projects.filter((record): record is AddonTrustRecord =>
+        typeof record?.root === "string" &&
+        typeof record?.digest === "string" &&
+        typeof record?.approvedAt === "string"),
+    };
+  } catch {
+    return { version: 1, projects: [] };
+  }
+}
+
+function persistTrust(path: string, root: string, digest: string): void {
+  const store = readTrustStore(path);
+  const projects = store.projects.filter((record) => record.root !== root);
+  projects.push({ root, digest, approvedAt: new Date().toISOString() });
+  atomicWritePrivateFileSync(path, `${JSON.stringify({ version: 1, projects }, null, 2)}\n`);
+}
 
 /**
  * Build and populate the addon host for a run, returning its wired
@@ -54,10 +128,44 @@ import type { BootContext } from "../contract.js";
  */
 export async function buildAddonHost(ctx: BootContext): Promise<AddonSurfaceBundle> {
   const host = createAddonHost({ handles: {} });
-  host.onFault(() => {
-    // swallow addon load faults so a broken addon cannot sink the session
+  host.onFault((fault) => {
+    process.stderr.write(`Addon ${fault.kind} fault: ${fault.message}\n`);
   });
-  return host.loadAll({ workspace: ctx.invocation.cwd ?? process.cwd() });
+  const workspace = resolve(ctx.invocation.cwd ?? process.cwd());
+  const addonsDir = join(workspace, ".indus", "addons");
+  let canonicalRoot: string;
+  let digest: string | null;
+  try {
+    canonicalRoot = realpathSync(workspace);
+    digest = hashAddonTree(addonsDir);
+  } catch (error) {
+    process.stderr.write(`Project addons blocked: ${error instanceof Error ? error.message : String(error)}\n`);
+    return host.loadAll({ explicitPaths: [] });
+  }
+  if (digest === null) return host.loadAll({ explicitPaths: [] });
+
+  const trustPath = join(ctx.workspace.profileDir, TRUST_FILE);
+  const approvedNow = ctx.invocation.flags["trust-project-addons"] === true;
+  let trusted = false;
+  try {
+    const store = readTrustStore(trustPath);
+    trusted = store.projects.some((record) => record.root === canonicalRoot && record.digest === digest);
+    if (!trusted && approvedNow) {
+      persistTrust(trustPath, canonicalRoot, digest);
+      trusted = true;
+    }
+  } catch (error) {
+    process.stderr.write(`Project addons blocked: ${error instanceof Error ? error.message : String(error)}\n`);
+    return host.loadAll({ explicitPaths: [] });
+  }
+
+  if (!trusted) {
+    process.stderr.write(
+      `Project addons are disabled until explicitly trusted for this exact content. Re-run with --trust-project-addons to approve ${canonicalRoot}.\n`,
+    );
+    return host.loadAll({ explicitPaths: [] });
+  }
+  return host.loadAll({ workspace: canonicalRoot });
 }
 
 /**

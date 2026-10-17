@@ -9,7 +9,13 @@ import { join } from "node:path";
 
 const FALLBACK_EDITOR = "vi";
 
+export interface TerminalHandoff {
+  stdin: { isRaw?: boolean; setRawMode?: (enabled: boolean) => unknown };
+  stdout: { isTTY?: boolean; write: (text: string) => unknown };
+}
+
 export interface ExternalEditorOptions {
+  readonly terminal?: TerminalHandoff;
   readonly env?: NodeJS.ProcessEnv;
   readonly dir?: string;
 }
@@ -33,7 +39,17 @@ export function openInExternalEditor(
   const [editor, ...editorArgs] = resolveEditor(env);
   try {
     writeFileSync(path, buffer, "utf8");
-    const result = spawnSync(editor, [...editorArgs, path], { stdio: "inherit" });
+    const terminal = options.terminal ?? {stdin:process.stdin,stdout:process.stdout};
+    const wasRaw = terminal.stdin.isRaw === true;
+    let result: ReturnType<typeof spawnSync>;
+    try {
+      terminal.stdin.setRawMode?.(false);
+      if (terminal.stdout.isTTY) terminal.stdout.write("\x1b[?1049h\x1b[?25h");
+      result = spawnSync(editor, [...editorArgs, path], { stdio: "inherit" });
+    } finally {
+      if (terminal.stdout.isTTY) terminal.stdout.write("\x1b[?1049l\x1b[?25l");
+      terminal.stdin.setRawMode?.(wasRaw);
+    }
     if (result.error || result.status !== 0) return null;
     return readFileSync(path, "utf8").replace(/\n$/, "");
   } catch {

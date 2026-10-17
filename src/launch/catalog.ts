@@ -3,6 +3,7 @@
  */
 import { ModelRegistry, type KnownProvider, type Model } from "indusagi/ai";
 import type { CatalogFilter } from "./contract.js";
+import { applyCodingAgentModelOverlay } from "../models.js";
 
 export interface CatalogIo {
   print(line: string): void;
@@ -22,10 +23,11 @@ export interface CatalogModelSource {
 }
 
 export function registrySource(registry: ModelRegistry = new ModelRegistry()): CatalogModelSource {
+  const overlaid = applyCodingAgentModelOverlay(registry);
   return {
-    providers: (): readonly (KnownProvider | string)[] => registry.getProviders(),
+    providers: (): readonly (KnownProvider | string)[] => overlaid.getProviders(),
     models: (provider: string): readonly Model<Model<string>["api"]>[] =>
-      registry.getModels(provider),
+      overlaid.getModels(provider),
   };
 }
 

@@ -26,4 +26,4 @@ export const BRAND: Brand = Object.freeze({
 /**
  * The product version — printed by `--version` and shown on the startup banner.
  */
-export const VERSION = "0.2.4";
+export const VERSION = "0.2.14";

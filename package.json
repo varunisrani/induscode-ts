@@ -1,6 +1,6 @@
 {
   "name": "indusagi-coding-agent",
-  "version": "0.2.5",
+  "version": "0.2.14",
   "description": "Indusagi coding agent — a terminal-first AI coding agent, built from scratch on the indusagi framework.",
   "author": "Varun Israni",
   "license": "AGPL-3.0",
@@ -22,48 +22,58 @@
     "node": ">=20"
   },
   "main": "./dist/index.js",
-  "types": "./dist/types/index.d.ts",
   "bin": {
     "indus": "dist/entry.js",
-    "indusagi": "dist/entry.js"
+    "indusagi": "dist/entry.js",
+    "indusagi-review": "dist/review-server.js"
   },
   "exports": {
     ".": {
-      "types": "./dist/types/index.d.ts",
       "import": "./dist/index.js"
     },
     "./guardrails": {
-      "types": "./dist/types/guardrails.d.ts",
       "import": "./dist/guardrails.js"
+    },
+    "./review-agent": {
+      "import": "./dist/review-agent.js"
     },
     "./package.json": "./package.json"
   },
   "files": [
     "dist",
+    "src",
+    "supabase",
+    ".env.review.example",
     "CHANGELOG.md",
     "CREDITS.md",
     "NOTICE",
-    "README.md"
+    "README.md",
+    "REVIEW_AGENT.md"
   ],
   "scripts": {
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "build": "node build.mjs",
-    "lineage-scan": "node scripts/lineage-scan.mjs",
     "test": "vitest --run",
     "test:watch": "vitest",
+    "test:tui": "vitest run src/console src/conductor/tui-controls.test.ts src/kit/external-editor.test.ts src/launch/login-cancellation.test.ts",
+    "test:tui:loop": "node scripts/test-tui-loop.mjs",
+    "test:tui:pty": "python3 scripts/test-tui-pty.py",
+    "prepublishOnly": "npm test && npm run build",
     "start": "node dist/entry.js",
-    "start:help": "node dist/entry.js --help"
+    "start:help": "node dist/entry.js --help",
+    "review:server": "node dist/review-server.js"
   },
   "dependencies": {
     "@sinclair/typebox": "^0.34.49",
     "chalk": "^5.6.2",
     "highlight.js": "^11.11.1",
-    "indusagi": "^0.13.8",
+    "indusagi": "file:../indus-rebuild",
     "ink": "^5.2.1",
     "jiti": "^2.7.0",
     "marked": "^18.0.4",
     "react": "^18.3.1",
     "strip-ansi": "^7.2.0",
+    "string-width": "^7.2.0",
     "ulid": "^3.0.2",
     "zod": "^4.4.3"
   },
@@ -72,6 +82,11 @@
     "@types/react": "^18.3.12",
     "esbuild": "^0.28.0",
     "typescript": "^5.7.2",
-    "vitest": "^2.1.8"
+    "vitest": "^4.1.11"
+  },
+  "overrides": {
+    "fast-uri": "3.1.6",
+    "hono": "4.13.5",
+    "qs": "6.16.0"
   }
 }

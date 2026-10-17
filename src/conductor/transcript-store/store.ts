@@ -4,6 +4,7 @@ import type { Usage } from "indusagi/ai";
 import { TRANSCRIPT_SCHEMA } from "../contract.js";
 import type { SessionHead, TranscriptEntry, TranscriptRole } from "../contract.js";
 import { encodeEntry, encodeHead, parseSessionText, roleForMessage } from "./serialize.js";
+import { appendPrivateFileSync, atomicWritePrivateFileSync, readPrivateFileSync } from "../../security/private-state.js";
 
 export interface TranscriptBackend {
   locate(sessionId: string): string;
@@ -54,18 +55,13 @@ export function fsBackend(dir: string): TranscriptBackend {
   return {
     locate: (sessionId) => `${dir}/${sessionId}.ndjson`,
     read: async (sessionId) => {
-      const fs = await import("node:fs/promises");
-      try { return await fs.readFile(await fileOf(sessionId), "utf8"); } catch { return null; }
+      return readPrivateFileSync(await fileOf(sessionId));
     },
     append: async (sessionId, line) => {
-      const fs = await import("node:fs/promises");
-      await fs.mkdir(dir, { recursive: true });
-      await fs.appendFile(await fileOf(sessionId), `${line}\n`, "utf8");
+      appendPrivateFileSync(await fileOf(sessionId), `${line}\n`);
     },
     rewrite: async (sessionId, text) => {
-      const fs = await import("node:fs/promises");
-      await fs.mkdir(dir, { recursive: true });
-      await fs.writeFile(await fileOf(sessionId), text.length === 0 ? "" : `${text}\n`, "utf8");
+      atomicWritePrivateFileSync(await fileOf(sessionId), text.length === 0 ? "" : `${text}\n`);
     },
   };
 }

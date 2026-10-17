@@ -18,9 +18,10 @@
  * ISO timestamp, on disk) conversion, which lets {@link isServerTokenExpired}
  * decide freshness without re-deriving the clock offset.
  */
-import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
+import { unlink } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { atomicWritePrivateFileSync, readPrivateFileSync } from "../security/private-state.js";
 
 /** Root of the indus-server. Used to build the gateway base URL and the device-login endpoints. Any trailing slash(es) are stripped so callers can append paths with a single separator. */
 export const INDUS_SERVER_URL: string = process.env.INDUS_SERVER_URL?.replace(/\/+$/, "") ?? "https://indus-server.vercel.app";
@@ -28,6 +29,16 @@ export const INDUS_SERVER_URL: string = process.env.INDUS_SERVER_URL?.replace(/\
 export const CONFIG_DIR: string = path.join(os.homedir(), ".indusagi", "agent");
 /** Absolute path of the JSON file the session token is persisted to. */
 export const TOKEN_FILE: string = path.join(CONFIG_DIR, "server-token.json");
+
+export interface ServerTokenPaths {
+  readonly configDir?: string;
+  readonly tokenFile?: string;
+}
+
+function resolveTokenPaths(paths: ServerTokenPaths = {}): { configDir: string; tokenFile: string } {
+  const configDir = paths.configDir ?? CONFIG_DIR;
+  return { configDir, tokenFile: paths.tokenFile ?? path.join(configDir, "server-token.json") };
+}
 
 /** On-disk token shape (what {@link storeServerToken} writes / {@link getServerToken} returns). */
 export interface TokenData {
@@ -65,9 +76,10 @@ export interface ServerTokenInput {
  *
  * @returns the parsed {@link TokenData}, or `null` when nothing is stored.
  */
-export async function getServerToken(): Promise<TokenData | null> {
+export async function getServerToken(paths: ServerTokenPaths = {}): Promise<TokenData | null> {
   try {
-    const data = await readFile(TOKEN_FILE, "utf8");
+    const data = readPrivateFileSync(resolveTokenPaths(paths).tokenFile);
+    if (data === null) return null;
     return JSON.parse(data);
   } catch {
     return null;
@@ -83,9 +95,9 @@ export async function getServerToken(): Promise<TokenData | null> {
  * @param token the device-flow token payload.
  * @returns `true` on success, `false` if the write failed.
  */
-export async function storeServerToken(token: ServerTokenInput): Promise<boolean> {
+export async function storeServerToken(token: ServerTokenInput, paths: ServerTokenPaths = {}): Promise<boolean> {
   try {
-    await mkdir(CONFIG_DIR, { recursive: true });
+    const { tokenFile } = resolveTokenPaths(paths);
     const tokenData = {
       access_token: token.access_token,
       refresh_token: token.refresh_token,
@@ -94,10 +106,7 @@ export async function storeServerToken(token: ServerTokenInput): Promise<boolean
       expires_at: token.expires_in !== undefined ? new Date(Date.now() + token.expires_in * 1000).toISOString() : null,
       created_at: new Date().toISOString(),
     };
-    await writeFile(TOKEN_FILE, `${JSON.stringify(tokenData, null, 2)}\n`, {
-      encoding: "utf8",
-      mode: 384,
-    });
+    atomicWritePrivateFileSync(tokenFile, `${JSON.stringify(tokenData, null, 2)}\n`);
     return true;
   } catch (error) {
     console.error("Failed to store server token:", (error as Error).message);
@@ -111,9 +120,9 @@ export async function storeServerToken(token: ServerTokenInput): Promise<boolean
  *
  * @returns `true` when a file was deleted, `false` when none existed / removal failed.
  */
-export async function clearServerToken(): Promise<boolean> {
+export async function clearServerToken(paths: ServerTokenPaths = {}): Promise<boolean> {
   try {
-    await unlink(TOKEN_FILE);
+    await unlink(resolveTokenPaths(paths).tokenFile);
     return true;
   } catch {
     return false;

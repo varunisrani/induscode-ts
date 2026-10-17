@@ -33,6 +33,7 @@ export const THINKING_EFFORTS = [
   "medium",
   "high",
   "xhigh",
+  "max",
 ] as const;
 
 export type ThinkingEffort = (typeof THINKING_EFFORTS)[number];

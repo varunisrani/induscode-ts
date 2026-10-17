@@ -5,7 +5,7 @@ import { useState } from "indusagi/react-host";
 import { Box, Text, useInput } from "indusagi/react-host/ink";
 import { wrapSelectionIndex, type InkThemeAdapter } from "indusagi/react-ink";
 import { jsx, jsxs } from "indusagi/react-host/jsx-runtime";
-import type { AgentRun } from "./BackgroundAgents.js";
+import { useAgentClock, type AgentRun } from "./BackgroundAgents.js";
 
 function formatTokens(tokens: number): string {
   return tokens >= 1e3 ? `${(tokens / 1e3).toFixed(1)}k` : String(tokens);
@@ -66,7 +66,7 @@ export interface AgentsViewProps {
 }
 
 export function AgentsView({ theme, runs, activity, tokens, now, onExit }: AgentsViewProps) {
-  const clock = now ?? Date.now();
+  const clock = useAgentClock(runs.some(run => run.status === "running"), now);
   const [selectedIndex, setSelectedIndex] = useState(runs.length > 0 ? 1 : 0);
   const rowCount = runs.length + 1;
   const index = Math.min(selectedIndex, rowCount - 1);

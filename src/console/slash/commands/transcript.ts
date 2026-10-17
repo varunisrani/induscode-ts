@@ -69,12 +69,7 @@ const compactCommand: SlashCommand = {
     ctx.setStatus({ kind: "busy", text: busyText });
     void (async () => {
       try {
-        if (instructions.length > 0) {
-          await ctx.conductor.executeBash(
-            `printf '%s' ${JSON.stringify(`Compaction guidance: ${instructions}`)}`
-          );
-        }
-        switch (await ctx.conductor.condense()) {
+        switch (await ctx.conductor.condense(instructions || undefined)) {
           case "condensed":
             ctx.setStatus(
               info(
@@ -123,7 +118,7 @@ const sessionCommand: SlashCommand = {
     const name = ctx.conductor.sessionName();
     const block = {
       id: `session-stats-${Date.now().toString(36)}`,
-      kind: "changelog",
+      kind: "changelog" as const,
       title: name ? `Session: ${name}` : "Session statistics",
       markdown: statsMarkdown(stats, name),
       timestamp: Date.now()
@@ -155,7 +150,7 @@ const costCommand: SlashCommand = {
 ${rows.map(([k, v]) => `| ${k} | ${v} |`).join("\n")}`;
     const block = {
       id: `session-cost-${Date.now().toString(36)}`,
-      kind: "changelog",
+      kind: "changelog" as const,
       title: "Session cost",
       markdown,
       timestamp: Date.now()

@@ -44,6 +44,25 @@ Requires **Node >= 20**. Authenticate with an API key — set `ANTHROPIC_API_KEY
 `indus --help` prints the full flag grammar (generated from one flag table);
 `indus --version` prints the version.
 
+## Project trust and private state
+
+- Executable files under `<repo>/.indus/addons` are disabled by default. Review
+  them, then pass `--trust-project-addons` to approve the canonical workspace and
+  the current addon-tree SHA-256 digest. The owner-only trust record is reused
+  while that digest is unchanged; any addon edit invalidates it.
+- Context files are discovered only inside the canonical `--cwd` workspace.
+  Imports that resolve outside it are ignored unless the exact file is listed by
+  `--allow-context-import <path>`. Symlinks and likely secret files such as
+  `.env`, private-key files, and credential files are never auto-imported.
+- On POSIX, agent state/session directories are enforced as `0700` and
+  credentials, trust records, integration keys, and transcripts as `0600`.
+  Existing owned paths are tightened; symlink destinations and paths owned by a
+  different user are rejected. Sensitive replacements use same-directory atomic
+  writes. Sarvam API keys are no longer read from or written to project config.
+- Windows does not implement POSIX mode bits. The same symlink/regular-file and
+  atomic-replacement checks apply, but this release does not install Windows
+  ACLs; use a private user profile with appropriately restricted ACLs.
+
 ## Architecture
 
 The binary is `src/entry.ts`. Boot resolves the invocation, prepares the
@@ -79,15 +98,19 @@ and attaches tools — OAuth + Streamable HTTP live in the framework.
 2. Point this package at the local framework (already set in `package.json`):
 
    ```json
-   "indusagi": "file:../indus-rebuild"
+   "indusagi": "link:indusagi"
    ```
 
-3. Build the framework, then this agent:
+3. Build and link the local framework, then build this agent:
 
    ```bash
-   cd ../indus-rebuild && npm run build
-   cd ../indusagi-coding-agent && npm install && npm run build
+   bun run setup
+   bun run build
    ```
+
+   Run `bun run setup` once to register `../indus-rebuild` with Bun. After
+   that, normal `bun install` uses the registered local link without copying
+   the framework directory.
 
 4. Configure the URL (any one of):
 
@@ -123,6 +146,17 @@ First connect may open a browser for Zoho OAuth. Tokens persist under
 
 See [`ZOHO_NATIVE_PLAN.md`](./ZOHO_NATIVE_PLAN.md) for architecture and precedence.
 
+## GitHub review agent
+
+This package also includes `indusagi-review`, a durable GitHub pull-request
+review worker powered by the Indusagi conductor and backed by Supabase. It
+validates signed webhooks, reads repository context through read-only GitHub
+tools, posts inline review findings and a check run, and persists retryable
+jobs without Prisma.
+
+See [REVIEW_AGENT.md](./REVIEW_AGENT.md) for GitHub App permissions, Supabase
+schema, environment variables, deployment, and security details.
+
 ## Sarvam AI (native MCP)
 
 Indian-language STT / TTS / translate / vision tools via local
@@ -132,7 +166,7 @@ Indian-language STT / TTS / translate / vision tools via local
 
 1. Install [uv](https://docs.astral.sh/uv/) (provides `uvx`).
 2. Get a key from [dashboard.sarvam.ai/key-management](https://dashboard.sarvam.ai/key-management).
-3. Framework already linked: `"indusagi": "file:../indus-rebuild"`.
+3. Framework already linked: `"indusagi": "link:indusagi"`.
 
 ```bash
 export SARVAM_API_KEY=…

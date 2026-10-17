@@ -20,5 +20,9 @@ export function welcomeLine(name?: string): string {
  */
 export function rowGradient(rowIndex: number, rowCount: number, primaryHex: string, secondaryHex: string): string {
   if (rowCount <= 1) return primaryHex;
-  return primaryHex;
+  const t = Math.max(0, Math.min(1, rowIndex / (rowCount - 1)));
+  const a = Number.parseInt(primaryHex.replace("#", ""), 16);
+  const b = Number.parseInt(secondaryHex.replace("#", ""), 16);
+  const channel = (shift: number) => Math.round(((a >> shift) & 255) * (1 - t) + ((b >> shift) & 255) * t).toString(16).padStart(2, "0");
+  return `#${channel(16)}${channel(8)}${channel(0)}`;
 }

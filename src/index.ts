@@ -15,4 +15,5 @@ export * as addons from "./addons/index.js";
 export * as channels from "./channels/index.js";
 export * as runtimeBridge from "./runtime-bridge/index.js";
 export * as insight from "./insight/index.js";
+export * as reviewAgent from "./review-agent/index.js";
 export { VERSION } from "./workspace/index.js";

@@ -52,6 +52,7 @@ export type ConsoleVerb =
 
 export interface ConsoleIntent {
   readonly verb: ConsoleVerb;
+  readonly direction?: -1 | 1;
   readonly text?: string;
   readonly overlay?: ModalKind;
 }
@@ -92,7 +93,7 @@ export function readKey(input: string, key: KeyChord): ConsoleIntent {
       case "n":
         return { verb: "flow:cycleModel" };
       case "p":
-        return { verb: "flow:cycleModel" };
+        return { verb: "flow:cycleModel", direction: -1 };
       case "t":
         return { verb: "view:toggleReasoning" };
       case "v":
@@ -117,15 +118,16 @@ export function readKey(input: string, key: KeyChord): ConsoleIntent {
   }
   if (key.escape) return { verb: "flow:dismiss" };
   if (key.tab) return key.shift ? { verb: "mode:cyclePermission" } : { verb: "flow:accept" };
-  if (key.backspace || key.delete || input === "\x7F" || input === "\b") {
+  if (key.delete) return { verb: "edit:eraseNext" };
+  if (key.backspace || input === "\x7F" || input === "\b") {
     return { verb: "edit:erasePrev" };
   }
   if (key.leftArrow) return { verb: "nav:left" };
   if (key.rightArrow) return { verb: "nav:right" };
   if (key.upArrow) return { verb: "nav:up" };
   if (key.downArrow) return { verb: "nav:down" };
-  if (key.pageUp) return { verb: "nav:home" };
-  if (key.pageDown) return { verb: "nav:end" };
+  // Page keys belong to the transcript/overlay viewport, not the composer.
+  if (key.pageUp || key.pageDown) return NO_INTENT;
   return isPrintable(input) ? typed(input) : NO_INTENT;
 }
 

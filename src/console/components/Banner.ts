@@ -9,7 +9,9 @@ import { basename } from "node:path";
 import type { InkThemeAdapter } from "indusagi/react-ink";
 import type { StartupChangelog, StartupMap, StartupNotice } from "../startup.js";
 import { MASCOTS, WHATS_NEW, pickWelcomeVariant, mascotRows, type MascotFace } from "./welcome.js";
-import { welcomeLine } from "./banner-sweep.js";
+import { welcomeLine, rowGradient } from "./banner-sweep.js";
+import chalk from "chalk";
+import { useTerminalSize } from "./ScrollViewport.js";
 
 const BRAND = "IndusCode";
 const COMPACT_EMBLEM = "▛▜▙▟";
@@ -22,6 +24,11 @@ const WORDMARK_ROWS: readonly string[] = [
   "██║██║ ╚████║██████╔╝╚██████╔╝███████║    ╚██████╗╚██████╔╝██████╔╝███████║",
   "╚═╝╚═╝  ╚═══╝╚═════╝  ╚═════╝ ╚══════╝     ╚═════╝ ╚═════╝ ╚═════╝ ╚══════╝"
 ];
+
+function StartupSummary({theme, startup}: {theme: InkThemeAdapter; startup?: StartupMap}) {
+  if (!startup?.sections.length) return null;
+  return jsx(Text, {wrap:"truncate-end", children:theme.muted(startup.sections.map(section => `${section.title}: ${section.count}`).join(" · "))});
+}
 
 function StartupNotices({ theme, notices }: { theme: InkThemeAdapter; notices: readonly StartupNotice[] }) {
   if (notices.length === 0) return null;
@@ -98,10 +105,10 @@ function ShellLine({ theme, workspace, branch }: { theme: InkThemeAdapter; works
   });
 }
 
-function Wordmark({ theme }: { theme: InkThemeAdapter }) {
+function Wordmark({ theme, sweep }: { theme: InkThemeAdapter; sweep?: boolean }) {
   return jsx(Box, {
     flexDirection: "column",
-    children: WORDMARK_ROWS.map((line, index) => jsx(Text, { children: theme.color("accent", line) }, index))
+    children: WORDMARK_ROWS.map((line, index) => jsx(Text, { children: sweep ? chalk.hex(rowGradient(index, WORDMARK_ROWS.length, theme.colors.accent, theme.colors.customMessage))(line) : theme.color("accent", line) }, index))
   });
 }
 
@@ -127,7 +134,7 @@ function paintMascot(theme: InkThemeAdapter, tone: string, text: string) {
   }
 }
 
-function Mascot({ theme, face }: { theme: InkThemeAdapter; face: MascotFace }) {
+function Mascot({ theme, face, sweep }: { theme: InkThemeAdapter; face: MascotFace; sweep?: boolean }) {
   return jsx(Box, {
     flexDirection: "column",
     alignItems: "center",
@@ -137,7 +144,7 @@ function Mascot({ theme, face }: { theme: InkThemeAdapter; face: MascotFace }) {
         Box,
         {
           children: row.map((seg, segIndex) =>
-            jsx(Text, { children: paintMascot(theme, seg.tone, seg.text) }, segIndex)
+            jsx(Text, { children: sweep && seg.tone === "head" ? chalk.hex(rowGradient(rowIndex, 5, theme.colors.accent, theme.colors.customMessage))(seg.text) : paintMascot(theme, seg.tone, seg.text) }, segIndex)
           )
         },
         rowIndex
@@ -174,6 +181,7 @@ export interface BannerProps {
 }
 
 export function Banner(props: BannerProps) {
+  const { columns } = useTerminalSize();
   const {
     theme,
     modelId,
@@ -187,15 +195,16 @@ export function Banner(props: BannerProps) {
     variantSeed,
     whatsNew,
     notices,
-    changelog
+    changelog, sweep, startup
   } = props;
   const noticeList = notices ?? [];
-  if (quiet || compact) {
+  if (quiet || compact || columns < 76) {
     return jsxs(Box, {
       flexDirection: "column",
       marginBottom: 1,
       children: [
         jsx(StartupNotices, { theme, notices: noticeList }),
+        jsx(StartupSummary, {theme, startup}),
         jsxs(Box, {
           children: [
             compact
@@ -225,8 +234,9 @@ export function Banner(props: BannerProps) {
       marginBottom: 1,
       children: [
         jsx(StartupNotices, { theme, notices: noticeList }),
+        jsx(StartupSummary, {theme, startup}),
         jsx(ShellLine, { theme, workspace, branch }),
-        jsx(Box, { marginTop: 1, children: jsx(Wordmark, { theme }) }),
+        jsx(Box, { marginTop: 1, children: jsx(Wordmark, { theme, sweep }) }),
         jsxs(Box, {
           marginTop: 1,
           flexDirection: "column",
@@ -266,6 +276,7 @@ export function Banner(props: BannerProps) {
     marginBottom: 1,
     children: [
       jsx(StartupNotices, { theme, notices: noticeList }),
+        jsx(StartupSummary, {theme, startup}),
       jsxs(Box, {
         flexDirection: "column",
         borderStyle: "round",
@@ -292,7 +303,7 @@ export function Banner(props: BannerProps) {
                 marginRight: 2,
                 children: [
                   jsx(Text, { bold: true, children: theme.color("text", greeting) }),
-                  jsx(Mascot, { theme, face: variant.mascot }),
+                  jsx(Mascot, { theme, face: variant.mascot, sweep }),
                   jsx(Text, { children: theme.dim(metaLine) }),
                   jsx(Text, { children: theme.dim(shortenWorkspace(workspace)) })
                 ]
